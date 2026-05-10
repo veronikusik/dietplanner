@@ -1,0 +1,32 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Sensitive / app source — NEVER commit
+*.js
+*.ts
+*.tsx
+*.jsx
+*.json
+!package.json
+*.env
+*.env.*
+*.key
+*.pem
+*.p12
+*.keystore
+*.jks
+*.secret
+*.credentials
+node_modules/
+src/
+android/
+ios/
+build/
+dist/
+.expo/
+credentials/
+*.apk
+*.aab
+*.ipa
+wallet-keypair*

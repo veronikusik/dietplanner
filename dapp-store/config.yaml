@@ -1,0 +1,35 @@
+app:
+  name: DietPlanner
+  package: com.veronikusik.dietplanner
+  version: 1.0.0
+  versionCode: 100
+  category: Health & Fitness
+  platform: android
+  repository: https://github.com/veronikusik/dietplanner
+
+developer:
+  name: Veronika Usik
+  email: veronikusik2005@gmail.com
+  github: https://github.com/veronikusik
+
+solana:
+  walletAdapter: true
+  cluster: mainnet-beta
+  usesSplTokenPayments: true
+  paymentToken: SKR
+
+listing:
+  shortDescription: Personalized nutrition planning with Solana wallet-based SKR premium features.
+  longDescriptionFile: ./listing.md
+  privacyPolicy: https://veronikusik.github.io/dietplanner/privacy.html
+  termsOfService: https://veronikusik.github.io/dietplanner/terms.html
+  healthDisclaimer: https://veronikusik.github.io/dietplanner/health-disclaimer.html
+  copyright: https://veronikusik.github.io/dietplanner/copyright.html
+  icon: ./assets/icon.png
+  splash: ./assets/splash.png
+
+build:
+  apkCommand: npm run build:android:release
+  aabCommand: npm run build:android:bundle
+  apkOutput: android/app/build/outputs/apk/release/app-release.apk
+  aabOutput: android/app/build/outputs/bundle/release/app-release.aab

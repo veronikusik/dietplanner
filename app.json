@@ -1,0 +1,78 @@
+{
+  "expo": {
+    "name": "DietPlanner",
+    "slug": "dietplanner",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0F1A12"
+    },
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "notification": {
+      "icon": "./assets/icon.png",
+      "color": "#34D399"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#0F1A12"
+      },
+      "package": "com.veronikusik.dietplanner",
+      "versionCode": 100,
+      "permissions": [
+        "INTERNET",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE",
+        "WAKE_LOCK",
+        "SCHEDULE_EXACT_ALARM",
+        "POST_NOTIFICATIONS"
+      ],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": false,
+          "data": [
+            {
+              "scheme": "solana",
+              "host": "*"
+            },
+            {
+              "scheme": "dietplanner"
+            },
+            {
+              "scheme": "com.veronikusik.dietplanner"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ]
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-asset",
+      "expo-font",
+      "expo-notifications"
+    ],
+    "extra": {
+      "developer": {
+        "name": "Veronika Usik",
+        "email": "veronikusik2005@gmail.com",
+        "github": "https://github.com/veronikusik"
+      },
+      "repository": "https://github.com/veronikusik/dietplanner",
+      "legal": {
+        "privacyPolicy": "https://veronikusik.github.io/dietplanner/privacy.html",
+        "termsOfService": "https://veronikusik.github.io/dietplanner/terms.html",
+        "healthDisclaimer": "https://veronikusik.github.io/dietplanner/health-disclaimer.html",
+        "copyright": "https://veronikusik.github.io/dietplanner/copyright.html"
+      }
+    }
+  }
+}

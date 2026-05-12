@@ -11,6 +11,7 @@ developer:
   name: Veronika Usik
   email: veronikusik2005@gmail.com
   github: https://github.com/veronikusik
+  website: https://veronikusik.github.io/dietplanner/
 
 solana:
   walletAdapter: true
@@ -21,6 +22,7 @@ solana:
 listing:
   shortDescription: Personalized nutrition planning with Solana wallet-based SKR premium features.
   longDescriptionFile: ./listing.md
+  website: https://veronikusik.github.io/dietplanner/
   privacyPolicy: https://veronikusik.github.io/dietplanner/privacy.html
   termsOfService: https://veronikusik.github.io/dietplanner/terms.html
   healthDisclaimer: https://veronikusik.github.io/dietplanner/health-disclaimer.html

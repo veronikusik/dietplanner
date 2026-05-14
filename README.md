@@ -2,8 +2,8 @@
 
 Android-only Solana diet app with MWA wallet connect, nutrition education, personalized meal planning, and SKR monetization hooks.
 
-Developer: Veronika Usik <veronikusik2005@gmail.com>  
-Repository: https://github.com/veronikusik/dietplanner  
+Developer: DietPlanner <contact@dietplanner.fit>
+Repository: https://github.com/veronikusik/dietplanner
 Android package: `com.veronikusik.dietplanner`
 
 ## Run
@@ -93,7 +93,7 @@ After pushing to `https://github.com/veronikusik/dietplanner`, enable GitHub Pag
 
 ## Create the standalone public GitHub repo
 
-Create an empty public repo under Veronika's account:
+Create an empty public repo under DietPlanner account:
 
 ```bash
 gh repo create veronikusik/dietplanner --public --source=. --remote=origin

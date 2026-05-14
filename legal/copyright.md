@@ -1,6 +1,6 @@
 # DietPlanner Copyright Notice
 
-**© 2024-2026 DietPlanner. All rights reserved.**
+**© 2026 DietPlanner. All rights reserved.**
 
 ## Application
 

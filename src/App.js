@@ -5,12 +5,14 @@ import FoodCard from './components/FoodCard';
 import MetricPill from './components/MetricPill';
 import { FOODS, GOALS, SOURCES } from './data/foods';
 import * as SecureStore from 'expo-secure-store';
+import * as FileSystem from 'expo-file-system';
 import { initNotifications, scheduleMealReminders, scheduleCoachReminders, scheduleCheckInNudge, cancelCheckInNudgeForToday, scheduleMorningCoachReminder, cancelMorningCoachReminder, cancelCoachReminders } from './engine/notifications';
 import { estimateHydrationLiters, generateDailyPlan, generateWeeklyPlan, buildGroceryList, searchFoods } from './engine/nutritionEngine';
 import { buildSkrPaymentIntent, submitSkrPaymentIntent, SKR_TREASURY_WALLET } from './engine/skrPayments';
 import * as WalletAdapter from '../WalletAdapter';
 
 const W = Dimensions.get('window').width;
+const SCREEN_H = Dimensions.get('window').height;
 
 const C = { bg: '#0F1A12', card: '#162118', accent: '#34D399', gold: '#FBBF24', coral: '#FB7185', blue: '#60A5FA', purple: '#A78BFA', text: '#F1F5F0', dim: 'rgba(241,245,240,0.5)', faint: 'rgba(241,245,240,0.25)' };
 const LEGAL_VERSION = '2026-05-10';
@@ -19,6 +21,43 @@ const LEGAL_URLS = {
   terms: 'https://veronikusik.github.io/dietplanner/terms.html',
   copyright: 'https://veronikusik.github.io/dietplanner/copyright.html',
 };
+
+const isActive = (e) => !!(e && (e.expiresAt == null || e.expiresAt > Date.now()));
+const formatRemaining = (expiresAt) => {
+  if (expiresAt == null) return 'Lifetime';
+  const ms = expiresAt - Date.now();
+  if (ms <= 0) return 'Expired';
+  const d = Math.floor(ms / 86400000);
+  const h = Math.floor((ms % 86400000) / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  if (d > 0) return `${d}d ${h}h left`;
+  if (h > 0) return `${h}h ${m}m left`;
+  return `${m}m left`;
+};
+
+const STREAK_MILESTONES = [
+  { days: 7, xp: 50, emoji: '🔥', label: '7-Day Streak' },
+  { days: 14, xp: 150, emoji: '⚡', label: '14-Day Streak' },
+  { days: 30, xp: 500, emoji: '🏆', label: '30-Day Streak' },
+  { days: 60, xp: 1000, emoji: '💎', label: '60-Day Streak' },
+  { days: 100, xp: 2000, emoji: '👑', label: '100-Day Streak' },
+];
+const XP_TIERS = [
+  { min: 0, label: 'Seedling', emoji: '🌱' },
+  { min: 100, label: 'Sprout', emoji: '🌿' },
+  { min: 500, label: 'Oak', emoji: '🌳' },
+  { min: 1500, label: 'Diamond', emoji: '💎' },
+  { min: 5000, label: 'Legend', emoji: '👑' },
+];
+const XP_VALUES = { login: 10, search: 5, foodDetail: 3, coachCheckIn: 20 };
+const XP_DAILY_CAPS = { search: 1, foodDetail: 3 };
+const getTier = (xp) => { for (let i = XP_TIERS.length - 1; i >= 0; i--) { if (xp >= XP_TIERS[i].min) return XP_TIERS[i]; } return XP_TIERS[0]; };
+const getNextTier = (xp) => XP_TIERS.find(t => t.min > xp) || null;
+const getEarnedMilestones = (streak) => STREAK_MILESTONES.filter(m => streak >= m.days);
+
+const BACKUP_FILE = `${FileSystem.documentDirectory}dietplanner_backup.json`;
+const saveBackup = async (data) => { try { await FileSystem.writeAsStringAsync(BACKUP_FILE, JSON.stringify(data)); } catch (_) {} };
+const loadBackup = async () => { try { const raw = await FileSystem.readAsStringAsync(BACKUP_FILE); return JSON.parse(raw); } catch (_) { return null; } };
 
 const SKR_FEATURES = [
   { id: 'dietplanner_pro_monthly', title: 'AI Chef Pro', price: '100 SKR / mo', emoji: '📅', detail: '30-day rotating meal calendars and adaptive grocery lists.', type: 'Monthly plan', unlocks: ['30-day meal calendar', 'Smart grocery lists', 'Meal prep schedule', 'Saved favorite plans'] },
@@ -58,6 +97,11 @@ function PremiumIcon({ size = 26, active = false, compact = false }) {
       <Text style={{ fontSize: size }}>💎</Text>
     </View>
   );
+}
+
+function TabIcon({ id }) {
+  const ch = id === 'plan' ? '🥗' : id === 'foods' ? '🍎' : id === 'about' ? '💡' : '';
+  return <Text style={{ fontSize: 22, lineHeight: 26 }}>{ch}</Text>;
 }
 
 /* ── food detail modal ─────────────────────────────────────────────── */
@@ -189,28 +233,76 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [entitlements, setEntitlements] = useState({});
   const [purchaseIntents, setPurchaseIntents] = useState({});
+  const [, setNowTick] = useState(Date.now());
   const [weekDay, setWeekDay] = useState(0);
   const [coachCheckedIn, setCoachCheckedIn] = useState(false);
   const [coachStreak, setCoachStreak] = useState(0);
   const [disclaimerAccepted, setDisclaimerAccepted] = useState(null);
   const [expandedFeature, setExpandedFeature] = useState('dietplanner_pro_monthly');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [rewards, setRewards] = useState({ xp: 0, loginStreak: 0, bestStreak: 0, lastLoginDate: null, claimedMilestones: [], dailyXpLog: {} });
   const toastAnim = useRef(new Animated.Value(0)).current;
   const entitlementsLoaded = useRef(false);
+  const rewardsLoaded = useRef(false);
 
   useEffect(() => {
     (async () => {
       try {
-        const raw = await SecureStore.getItemAsync('ds_entitlements');
+        let raw = await SecureStore.getItemAsync('ds_entitlements');
+        let rwRaw = await SecureStore.getItemAsync('ds_rewards');
+        let streakRaw = await SecureStore.getItemAsync('ds_coach_streak');
+        let disc = await SecureStore.getItemAsync('ds_legal_v1_ok');
+
+        // Restore from file backup if SecureStore is empty (after clear data / reinstall)
+        if (!raw && !rwRaw) {
+          const backup = await loadBackup();
+          if (backup) {
+            if (backup.entitlements) { raw = JSON.stringify(backup.entitlements); await SecureStore.setItemAsync('ds_entitlements', raw).catch(() => {}); }
+            if (backup.rewards) { rwRaw = JSON.stringify(backup.rewards); await SecureStore.setItemAsync('ds_rewards', rwRaw).catch(() => {}); }
+            if (backup.coachStreak) { streakRaw = JSON.stringify(backup.coachStreak); await SecureStore.setItemAsync('ds_coach_streak', streakRaw).catch(() => {}); }
+            if (backup.legalAccepted) { disc = backup.legalAccepted; await SecureStore.setItemAsync('ds_legal_v1_ok', disc).catch(() => {}); }
+          }
+        }
+
         if (raw) setEntitlements(JSON.parse(raw));
-        const streakRaw = await SecureStore.getItemAsync('ds_coach_streak');
         if (streakRaw) {
           const s = JSON.parse(streakRaw);
-          setCoachStreak(s.streak || 0);
           const today = new Date().toDateString();
-          if (s.lastDate === today) setCoachCheckedIn(true);
+          const yesterday = new Date(Date.now() - 86400000).toDateString();
+          if (s.lastDate === today) {
+            setCoachStreak(s.streak || 0);
+            setCoachCheckedIn(true);
+          } else if (s.lastDate === yesterday) {
+            setCoachStreak(s.streak || 0);
+          } else {
+            setCoachStreak(0);
+          }
         }
-        const disc = await SecureStore.getItemAsync('ds_legal_v1_ok');
         setDisclaimerAccepted(disc === LEGAL_VERSION);
+        if (rwRaw) {
+          const rw = JSON.parse(rwRaw);
+          const today = new Date().toDateString();
+          const yesterday = new Date(Date.now() - 86400000).toDateString();
+          let streak = rw.loginStreak || 0;
+          let best = rw.bestStreak || 0;
+          let xp = rw.xp || 0;
+          let newMilestones = [...(rw.claimedMilestones || [])];
+          if (rw.lastLoginDate === today) {
+            // Already logged in today
+          } else if (rw.lastLoginDate === yesterday) {
+            streak += 1;
+            xp += XP_VALUES.login;
+            STREAK_MILESTONES.forEach(m => { if (streak >= m.days && !newMilestones.includes(m.days)) { xp += m.xp; newMilestones.push(m.days); } });
+          } else {
+            streak = 1;
+            xp += XP_VALUES.login;
+          }
+          if (streak > best) best = streak;
+          setRewards({ xp, loginStreak: streak, bestStreak: best, lastLoginDate: today, claimedMilestones: newMilestones, dailyXpLog: rw.lastLoginDate === today ? (rw.dailyXpLog || {}) : {} });
+        } else {
+          setRewards({ xp: XP_VALUES.login, loginStreak: 1, bestStreak: 1, lastLoginDate: new Date().toDateString(), claimedMilestones: [], dailyXpLog: {} });
+        }
+        rewardsLoaded.current = true;
       } catch (_) {}
       entitlementsLoaded.current = true;
     })();
@@ -219,7 +311,47 @@ export default function App() {
   useEffect(() => {
     if (!entitlementsLoaded.current) return;
     SecureStore.setItemAsync('ds_entitlements', JSON.stringify(entitlements)).catch(() => {});
+    saveBackup({ entitlements, rewards, coachStreak: { streak: coachStreak, lastDate: new Date().toDateString() }, legalAccepted: disclaimerAccepted ? LEGAL_VERSION : null });
   }, [entitlements]);
+
+  useEffect(() => {
+    if (!rewardsLoaded.current) return;
+    SecureStore.setItemAsync('ds_rewards', JSON.stringify(rewards)).catch(() => {});
+    saveBackup({ entitlements, rewards, coachStreak: { streak: coachStreak, lastDate: new Date().toDateString() }, legalAccepted: disclaimerAccepted ? LEGAL_VERSION : null });
+  }, [rewards]);
+
+  const earnXp = useCallback((action, itemId) => {
+    setRewards(prev => {
+      const log = { ...prev.dailyXpLog };
+      const cap = XP_DAILY_CAPS[action];
+      if (cap != null) {
+        const seen = log[action] || [];
+        if (seen.length >= cap) return prev;
+        if (itemId && seen.includes(itemId)) return prev;
+        log[action] = itemId ? [...seen, itemId] : [...seen, `_${seen.length}`];
+      }
+      return { ...prev, xp: prev.xp + (XP_VALUES[action] || 0), dailyXpLog: log };
+    });
+  }, []);
+
+  // Periodic tick to re-evaluate expiration and clean up expired entitlements
+  useEffect(() => {
+    const id = setInterval(() => {
+      setNowTick(Date.now());
+      setEntitlements(prev => {
+        const now = Date.now();
+        let changed = false;
+        const next = {};
+        for (const k in prev) {
+          const e = prev[k];
+          if (e && e.expiresAt != null && e.expiresAt <= now) { changed = true; continue; }
+          next[k] = e;
+        }
+        return changed ? next : prev;
+      });
+    }, 30000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     initNotifications().catch(() => {});
@@ -231,7 +363,7 @@ export default function App() {
 
   useEffect(() => {
     const coach = entitlements.dietplanner_daily_coach;
-    if (coach?.expiresAt) {
+    if (isActive(coach) && coach?.expiresAt) {
       scheduleCoachReminders(coach.expiresAt).catch(() => {});
       scheduleMorningCoachReminder().catch(() => {});
       if (!coachCheckedIn) scheduleCheckInNudge().catch(() => {});
@@ -254,9 +386,12 @@ export default function App() {
   const weeklyPlan = useMemo(() => generateWeeklyPlan(profile, interests), [profile, interests]);
   const groceryList = useMemo(() => buildGroceryList(weeklyPlan), [weeklyPlan]);
   const hydration = estimateHydrationLiters(profile.weightKg, profile.activity);
-  const hasPro = !!entitlements.dietplanner_pro_monthly;
-  const hasCoach = !!entitlements.dietplanner_daily_coach;
-  const hasFoodIntel = !!entitlements.dietplanner_food_report;
+  const loyaltyPremium = rewards.loginStreak >= 30;
+  const hasPro = isActive(entitlements.dietplanner_pro_monthly) || loyaltyPremium;
+  const hasCoach = isActive(entitlements.dietplanner_daily_coach) || loyaltyPremium;
+  const hasFoodIntel = isActive(entitlements.dietplanner_food_report) || loyaltyPremium;
+  const paidCount = (isActive(entitlements.dietplanner_pro_monthly) ? 1 : 0) + (isActive(entitlements.dietplanner_daily_coach) ? 1 : 0) + (isActive(entitlements.dietplanner_food_report) ? 1 : 0);
+  const activeCount = (hasPro ? 1 : 0) + (hasCoach ? 1 : 0) + (hasFoodIntel ? 1 : 0);
 
   const doCoachCheckIn = useCallback(async () => {
     const today = new Date().toDateString();
@@ -265,8 +400,13 @@ export default function App() {
     setCoachStreak(newStreak);
     await SecureStore.setItemAsync('ds_coach_streak', JSON.stringify({ streak: newStreak, lastDate: today })).catch(() => {});
     cancelCheckInNudgeForToday().catch(() => {});
+    earnXp('coachCheckIn');
     showToast(`Day ${newStreak} check-in done! Keep it up.`, 'ok');
-  }, [coachStreak, showToast]);
+  }, [coachStreak, showToast, earnXp]);
+  const tier = getTier(rewards.xp);
+  const nextTier = getNextTier(rewards.xp);
+  const earnedMilestones = getEarnedMilestones(rewards.loginStreak);
+  const nextMilestone = STREAK_MILESTONES.find(m => m.days > rewards.loginStreak) || null;
   const fullFoodAccess = hasFoodIntel || hasPro;
   const availableFoods = useMemo(() => fullFoodAccess ? FOODS : FOODS.filter(food => !food.premium), [fullFoodAccess]);
   const lockedFoodsCount = FOODS.length - availableFoods.length;
@@ -334,7 +474,7 @@ export default function App() {
       showToast('Please accept the Terms, Privacy Policy, and payment disclosures before purchasing.', 'error');
       return;
     }
-    if (entitlements[f.id]) { showToast(`${f.title} is already active.`, 'ok'); return; }
+    if (isActive(entitlements[f.id])) { showToast(`${f.title} is already active.`, 'ok'); return; }
     let walletAddr = wallet;
     if (!walletAddr) {
       const res = await connectWallet();
@@ -393,15 +533,20 @@ export default function App() {
             {/* hero banner */}
             <LinearGradient colors={['#1B3A26', '#162B1E', C.card]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={$.hero}>
               <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-                <Text style={{ fontSize: 40, marginBottom: 8 }}>🥗</Text>
-                <Pressable onPress={() => setTab('premium')} style={[$.heroPlanPill, Object.keys(entitlements).length ? { backgroundColor: `${C.accent}25`, borderColor: `${C.accent}66` } : { backgroundColor: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.12)' }]}>
-                  <Text style={{ fontSize: 12 }}>{Object.keys(entitlements).length ? '✓' : '🔒'}</Text>
-                  <Text style={[$.heroPlanT, { color: Object.keys(entitlements).length ? C.accent : C.dim }]}>
-                    {Object.keys(entitlements).length ? `${Object.keys(entitlements).length} Premium` : 'Free'}
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Text style={{ fontSize: 40, marginBottom: 8 }}>🥗</Text>
+                  {rewards.loginStreak > 0 && <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: 'rgba(251,191,36,0.15)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, marginBottom: 8 }}><Text style={{ fontSize: 12 }}>🔥</Text><Text style={{ color: C.gold, fontSize: 12, fontWeight: '900' }}>{rewards.loginStreak}</Text></View>}
+                </View>
+                <Pressable onPress={() => setTab('premium')} style={[$.heroPlanPill, activeCount ? { backgroundColor: loyaltyPremium ? `${C.gold}20` : `${C.accent}25`, borderColor: loyaltyPremium ? `${C.gold}55` : `${C.accent}66` } : { backgroundColor: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.12)' }]}>
+                  <View style={{ width: 18, height: 18, borderRadius: 9, backgroundColor: activeCount ? (loyaltyPremium ? `${C.gold}33` : `${C.accent}33`) : 'rgba(255,255,255,0.08)', alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={{ fontSize: 9, fontWeight: '900', color: activeCount ? (loyaltyPremium ? C.gold : C.accent) : C.faint }}>{activeCount ? '✦' : '○'}</Text>
+                  </View>
+                  <Text style={[$.heroPlanT, { color: activeCount ? (loyaltyPremium ? C.gold : C.accent) : C.dim }]}>
+                    {loyaltyPremium && !paidCount ? 'Loyalty' : activeCount ? `${activeCount} Premium` : 'Free'}
                   </Text>
                   <View style={{ flexDirection: 'row', gap: 3, marginLeft: 4 }}>
                     {SKR_FEATURES.map(f => (
-                      <View key={f.id} style={[$.statusDot, { width: 6, height: 6, borderRadius: 3 }, entitlements[f.id] ? { backgroundColor: C.accent } : purchaseIntents[f.id] ? { backgroundColor: C.gold } : { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
+                      <View key={f.id} style={[$.statusDot, { width: 6, height: 6, borderRadius: 3 }, isActive(entitlements[f.id]) ? { backgroundColor: C.accent } : purchaseIntents[f.id] ? { backgroundColor: C.gold } : { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
                     ))}
                   </View>
                 </Pressable>
@@ -415,67 +560,84 @@ export default function App() {
               </View>
             </LinearGradient>
 
-            {/* profile — body */}
-            <GlassCard style={{ marginTop: 14 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                <Text style={{ fontSize: 20 }}>👤</Text>
-                <Text style={$.secT}>Body</Text>
-              </View>
-              <View style={{ flexDirection: 'row', gap: 6 }}>
-                {['male', 'female'].map(v => <Chip key={v} label={v} active={profile.sex === v} onPress={() => up('sex', v)} />)}
-              </View>
-              <View style={$.profileGrid}>
-                {[['age', 'Age', 'yr'], ['heightCm', 'Height', 'cm'], ['weightKg', 'Weight', 'kg']].map(([k, label, unit]) => (
-                  <View key={k} style={$.profileField}>
-                    <View style={$.pfCompact}>
-                      <TextInput style={$.pfInput} value={profile[k]} onChangeText={v => up(k, v)} keyboardType="number-pad" placeholder="—" placeholderTextColor={C.faint} />
-                      <Text style={$.pfUnit}>{unit}</Text>
-                    </View>
-                    <Text style={$.pfLabel}>{label}</Text>
+            {/* settings drawer */}
+            <Pressable onPress={() => setSettingsOpen(p => !p)} style={{ marginTop: 14 }}>
+              <GlassCard colors={['#1A2420', '#162118']}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Text style={{ fontSize: 18 }}>⚙️</Text>
+                    <Text style={{ color: C.text, fontSize: 15, fontWeight: '900' }}>Settings</Text>
                   </View>
-                ))}
-              </View>
-            </GlassCard>
-
-            {/* profile — plan settings */}
-            <GlassCard style={{ marginTop: 8 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                <Text style={{ fontSize: 20 }}>🎯</Text>
-                <Text style={$.secT}>Goal & Meals</Text>
-              </View>
-              <Row>{GOALS.map(g => <Chip key={g.id} label={g.label} active={profile.goal === g.id} accent={g.accent} onPress={() => up('goal', g.id)} />)}</Row>
-
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 }}>
-                <Text style={{ color: C.dim, fontSize: 12, fontWeight: '800', width: 56 }}>Meals</Text>
-                <View style={{ flexDirection: 'row', gap: 6, flex: 1 }}>
-                  {['2', '3', '4', '5'].map(v => (
-                    <Pressable key={v} onPress={() => up('mealsPerDay', v)} style={[$.numChip, profile.mealsPerDay === v && $.numChipOn]}>
-                      <Text style={[$.numChipT, profile.mealsPerDay === v && { color: C.bg }]}>{v}</Text>
-                    </Pressable>
-                  ))}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Text style={{ color: C.dim, fontSize: 11, fontWeight: '700' }}>{profile.sex} · {profile.age}yr · {profile.weightKg}kg · {(profile.goal || '').replace('_', ' ')}</Text>
+                    <Text style={{ color: C.dim, fontSize: 14 }}>{settingsOpen ? '▾' : '▸'}</Text>
+                  </View>
                 </View>
-              </View>
+              </GlassCard>
+            </Pressable>
 
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 }}>
-                <Text style={{ color: C.dim, fontSize: 12, fontWeight: '800', width: 56 }}>Activity</Text>
-                <View style={{ flexDirection: 'row', gap: 6, flex: 1, flexWrap: 'wrap' }}>
-                  {['low', 'light', 'moderate', 'high'].map(v => (
-                    <Pressable key={v} onPress={() => up('activity', v)} style={[$.actChip, profile.activity === v && $.numChipOn]}>
-                      <Text style={[$.numChipT, profile.activity === v && { color: C.bg }]} numberOfLines={1}>{v}</Text>
-                    </Pressable>
-                  ))}
-                </View>
-              </View>
-            </GlassCard>
+            {settingsOpen && (
+              <View>
+                <GlassCard style={{ marginTop: 8 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                    <Text style={{ fontSize: 18 }}>👤</Text>
+                    <Text style={{ color: C.text, fontSize: 14, fontWeight: '900' }}>Body</Text>
+                  </View>
+                  <View style={{ flexDirection: 'row', gap: 6 }}>
+                    {['male', 'female'].map(v => <Chip key={v} label={v} active={profile.sex === v} onPress={() => up('sex', v)} />)}
+                  </View>
+                  <View style={$.profileGrid}>
+                    {[['age', 'Age', 'yr'], ['heightCm', 'Height', 'cm'], ['weightKg', 'Weight', 'kg']].map(([k, label, unit]) => (
+                      <View key={k} style={$.profileField}>
+                        <View style={$.pfCompact}>
+                          <TextInput style={$.pfInput} value={profile[k]} onChangeText={v => up(k, v)} keyboardType="number-pad" placeholder="—" placeholderTextColor={C.faint} />
+                          <Text style={$.pfUnit}>{unit}</Text>
+                        </View>
+                        <Text style={$.pfLabel}>{label}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </GlassCard>
 
-            {/* profile — interests */}
-            <GlassCard style={{ marginTop: 8 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                <Text style={{ fontSize: 20 }}>✨</Text>
-                <Text style={$.secT}>Interests</Text>
+                <GlassCard style={{ marginTop: 8 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                    <Text style={{ fontSize: 18 }}>🎯</Text>
+                    <Text style={{ color: C.text, fontSize: 14, fontWeight: '900' }}>Goal & Meals</Text>
+                  </View>
+                  <Row>{GOALS.map(g => <Chip key={g.id} label={g.label} active={profile.goal === g.id} accent={g.accent} onPress={() => up('goal', g.id)} />)}</Row>
+
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 }}>
+                    <Text style={{ color: C.dim, fontSize: 12, fontWeight: '800', width: 56 }}>Meals</Text>
+                    <View style={{ flexDirection: 'row', gap: 6, flex: 1 }}>
+                      {['2', '3', '4', '5'].map(v => (
+                        <Pressable key={v} onPress={() => up('mealsPerDay', v)} style={[$.numChip, profile.mealsPerDay === v && $.numChipOn]}>
+                          <Text style={[$.numChipT, profile.mealsPerDay === v && { color: C.bg }]}>{v}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </View>
+
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 }}>
+                    <Text style={{ color: C.dim, fontSize: 12, fontWeight: '800', width: 56 }}>Activity</Text>
+                    <View style={{ flexDirection: 'row', gap: 6, flex: 1, flexWrap: 'wrap' }}>
+                      {['low', 'light', 'moderate', 'high'].map(v => (
+                        <Pressable key={v} onPress={() => up('activity', v)} style={[$.actChip, profile.activity === v && $.numChipOn]}>
+                          <Text style={[$.numChipT, profile.activity === v && { color: C.bg }]} numberOfLines={1}>{v}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </View>
+                </GlassCard>
+
+                <GlassCard style={{ marginTop: 8 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                    <Text style={{ fontSize: 18 }}>✨</Text>
+                    <Text style={{ color: C.text, fontSize: 14, fontWeight: '900' }}>Interests</Text>
+                  </View>
+                  <Row>{['skin', 'hair', 'mood', 'gut', 'omega3', 'antioxidant', 'heart', 'satiety'].map(t => <Chip key={t} label={t} active={interests.includes(t)} onPress={() => tog(t)} />)}</Row>
+                </GlassCard>
               </View>
-              <Row>{['skin', 'hair', 'mood', 'gut', 'omega3', 'antioxidant', 'heart', 'satiety'].map(t => <Chip key={t} label={t} active={interests.includes(t)} onPress={() => tog(t)} />)}</Row>
-            </GlassCard>
+            )}
 
             {/* daily targets */}
             <GlassCard style={{ marginTop: 14 }} colors={['#1A2420', '#162118']}>
@@ -578,14 +740,14 @@ export default function App() {
             <Text style={{ fontSize: 40, marginBottom: 4 }}>🍎</Text>
             <Text style={$.secT}>Food & Drink Encyclopedia</Text>
             <Text style={$.secS}>{fullFoodAccess ? `Global database unlocked: ${FOODS.length} foods across continents with Deep Food Intel.` : `Free starter catalog: ${availableFoods.length} foods. Premium unlocks ${lockedFoodsCount} more foods from global cuisines and advanced reports.`}</Text>
-            <TextInput style={$.search} value={query} onChangeText={setQuery} placeholder="Search salmon, dal, injera, iron, Africa…" placeholderTextColor={C.faint} />
+            <TextInput style={$.search} value={query} onChangeText={v => { setQuery(v); if (v.trim().length >= 3) earnXp('search'); }} placeholder="Search salmon, dal, injera, iron, Africa…" placeholderTextColor={C.faint} />
             <GlassCard style={{ marginTop: 8, marginBottom: 10 }} colors={fullFoodAccess ? ['#1A3028', '#162820'] : ['#2B2415', '#1A2418']}>
-              <Text style={$.mealN}>{fullFoodAccess ? '✅ Full Food Database Active' : '🔒 Premium Food Database'}</Text>
+              <Text style={$.mealN}>{fullFoodAccess ? '✦ Full Food Database Active' : '○  Premium Food Database'}</Text>
               <Text style={$.secS}>{fullFoodAccess ? 'Global foods, regions, vitamins, minerals, goal tags, cautions, and report-ready insights are available.' : `Unlock ${lockedFoodsCount} more foods across Africa, Asia, Europe, Latin America, the Middle East, the Pacific, seafood, staples, fruits, vegetables, fermented foods, and performance foods.`}</Text>
               {!fullFoodAccess && <Pressable onPress={() => setTab('premium')} style={$.miniBtn}><Text style={$.miniBtnT}>View Premium</Text></Pressable>}
             </GlassCard>
             <Text style={$.resultN}>{foods.length} shown · {availableFoods.length}/{FOODS.length} foods unlocked</Text>
-            <View style={$.foodGrid}>{foods.map(food => <FoodCard key={food.id} food={food} onPress={() => setSelectedFood(food)} />)}</View>
+            <View style={$.foodGrid}>{foods.map(food => <FoodCard key={food.id} food={food} onPress={() => { setSelectedFood(food); earnXp('foodDetail', food.id); }} />)}</View>
           </View>)}
 
           {/* ═══ PREMIUM ═══ */}
@@ -593,16 +755,43 @@ export default function App() {
             <Text style={$.secT}>Premium Plans</Text>
             <Text style={$.secS}>Unlock advanced nutrition tools powered by SKR on Solana.</Text>
 
-            <View style={[$.statusBar, Object.keys(entitlements).length ? { borderColor: `${C.accent}55`, backgroundColor: `${C.accent}12` } : { borderColor: `${C.gold}33`, backgroundColor: `${C.gold}10` }]}>
-              <Text style={[$.statusBarT, { color: Object.keys(entitlements).length ? C.accent : C.gold }]}>
-                {Object.keys(entitlements).length ? `✅ ${Object.keys(entitlements).length} Premium Active` : '🔒 Free Plan'}
+            <View style={[$.statusBar, activeCount ? { borderColor: loyaltyPremium ? `${C.gold}55` : `${C.accent}55`, backgroundColor: loyaltyPremium ? `${C.gold}10` : `${C.accent}12` } : { borderColor: `${C.gold}33`, backgroundColor: `${C.gold}10` }]}>
+              <Text style={[$.statusBarT, { color: activeCount ? (loyaltyPremium ? C.gold : C.accent) : C.gold }]}>
+                {loyaltyPremium ? `🔥 Loyalty Premium (${rewards.loginStreak}d)` : activeCount ? `✦ ${activeCount} Premium Active` : '○  Free Plan'}
               </Text>
               <View style={{ flexDirection: 'row', gap: 4 }}>
                 {SKR_FEATURES.map(f => (
-                  <View key={f.id} style={[$.statusDot, entitlements[f.id] ? { backgroundColor: C.accent } : purchaseIntents[f.id] ? { backgroundColor: C.gold } : { backgroundColor: 'rgba(255,255,255,0.15)' }]} />
+                  <View key={f.id} style={[$.statusDot, (isActive(entitlements[f.id]) || loyaltyPremium) ? { backgroundColor: loyaltyPremium ? C.gold : C.accent } : purchaseIntents[f.id] ? { backgroundColor: C.gold } : { backgroundColor: 'rgba(255,255,255,0.15)' }]} />
                 ))}
               </View>
             </View>
+
+            {loyaltyPremium && (
+              <GlassCard style={{ marginTop: 10 }} colors={['#2A2415', '#1E1C12']}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <Text style={{ fontSize: 28 }}>👑</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: C.gold, fontSize: 15, fontWeight: '900' }}>Loyalty Premium Active</Text>
+                    <Text style={{ color: C.dim, fontSize: 11, fontWeight: '700', marginTop: 2 }}>All features unlocked — earned through your {rewards.loginStreak}-day streak. Keep visiting daily to maintain access.</Text>
+                  </View>
+                </View>
+              </GlassCard>
+            )}
+
+            {!loyaltyPremium && rewards.loginStreak > 0 && rewards.loginStreak < 30 && (
+              <GlassCard style={{ marginTop: 10 }} colors={['#1C1A28', '#18162A']}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <Text style={{ fontSize: 22 }}>🔥</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: C.purple, fontSize: 13, fontWeight: '900' }}>{30 - rewards.loginStreak} days to free Premium</Text>
+                    <Text style={{ color: C.dim, fontSize: 11, fontWeight: '700', marginTop: 2 }}>Reach a 30-day streak to unlock all features for free. Don't miss a day!</Text>
+                  </View>
+                </View>
+                <View style={{ height: 5, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 3, marginTop: 10, overflow: 'hidden' }}>
+                  <View style={{ height: 5, borderRadius: 3, backgroundColor: C.purple, width: `${Math.round((rewards.loginStreak / 30) * 100)}%` }} />
+                </View>
+              </GlassCard>
+            )}
 
             <Text style={[$.secT, { marginTop: 20 }]}>💎  Premium SKR Features</Text>
             <Text style={$.secS}>Purchases send SKR to the DietPlanner treasury. Your wallet pays SOL network fees in real time.</Text>
@@ -618,8 +807,8 @@ export default function App() {
                         <Text style={[$.mealN, { fontSize: 15 }]}>{f.title}</Text>
                         <Text style={[$.typeT, { fontSize: 11 }]}>{f.type}</Text>
                       </View>
-                      <View style={[$.priceBadge, entitlements[f.id] && $.activeBadge, purchaseIntents[f.id] && $.pendingBadge, { marginRight: 6 }]}>
-                        <Text style={[$.priceT, entitlements[f.id] && $.activeBadgeT]}>{entitlements[f.id] ? 'ACTIVE' : purchaseIntents[f.id] ? 'PENDING' : f.price}</Text>
+                      <View style={[$.priceBadge, (isActive(entitlements[f.id]) || loyaltyPremium) && $.activeBadge, !loyaltyPremium && purchaseIntents[f.id] && $.pendingBadge, loyaltyPremium && !isActive(entitlements[f.id]) && { backgroundColor: `${C.gold}22` }, { marginRight: 6 }]}>
+                        <Text style={[$.priceT, (isActive(entitlements[f.id]) || loyaltyPremium) && $.activeBadgeT, loyaltyPremium && !isActive(entitlements[f.id]) && { color: C.gold }]}>{loyaltyPremium && !isActive(entitlements[f.id]) ? 'LOYALTY' : isActive(entitlements[f.id]) ? 'ACTIVE' : purchaseIntents[f.id] ? 'PENDING' : f.price}</Text>
                       </View>
                       <Text style={{ color: C.dim, fontSize: 16 }}>{expanded ? '▾' : '▸'}</Text>
                     </View>
@@ -630,9 +819,15 @@ export default function App() {
                         <View style={{ marginTop: 8, gap: 4 }}>
                           {f.unlocks.map(item => <Text key={item} style={$.unlockT}>✓ {item}</Text>)}
                         </View>
-                        <Pressable onPress={() => buySkr(f)} style={[$.btnMain, { marginTop: 12, paddingVertical: 12 }, entitlements[f.id] && { backgroundColor: 'rgba(255,255,255,0.08)' }]}>
-                          <Text style={[$.btnMainT, entitlements[f.id] && { color: C.dim }]}>
-                            {entitlements[f.id] ? '✓ Unlocked' : purchaseIntents[f.id] ? 'Retry payment' : wallet ? `Buy ${f.price}` : 'Connect wallet to buy'}
+                        {isActive(entitlements[f.id]) && (
+                          <Text style={{ color: C.accent, fontSize: 11, fontWeight: '800', marginTop: 8 }}>{formatRemaining(entitlements[f.id].expiresAt)}</Text>
+                        )}
+                        {loyaltyPremium && !isActive(entitlements[f.id]) && (
+                          <Text style={{ color: C.gold, fontSize: 11, fontWeight: '800', marginTop: 8 }}>Earned via {rewards.loginStreak}-day loyalty streak</Text>
+                        )}
+                        <Pressable onPress={() => !loyaltyPremium && !isActive(entitlements[f.id]) && buySkr(f)} style={[$.btnMain, { marginTop: 12, paddingVertical: 12 }, (isActive(entitlements[f.id]) || loyaltyPremium) && { backgroundColor: 'rgba(255,255,255,0.08)' }]}>
+                          <Text style={[$.btnMainT, (isActive(entitlements[f.id]) || loyaltyPremium) && { color: C.dim }]}>
+                            {loyaltyPremium ? '👑 Loyalty Unlocked' : isActive(entitlements[f.id]) ? '✓ Unlocked' : purchaseIntents[f.id] ? 'Retry payment' : wallet ? `Buy ${f.price}` : 'Connect wallet to buy'}
                           </Text>
                         </Pressable>
                       </View>
@@ -641,6 +836,98 @@ export default function App() {
                 </Pressable>
               );
             })}
+
+            {/* ── Rewards ── */}
+            <Text style={[$.secT, { marginTop: 24 }]}>🏆  Rewards</Text>
+            <Text style={$.secS}>Open the app daily to build your streak, earn XP, and level up.</Text>
+
+            <GlassCard style={{ marginTop: 10 }} colors={['#1C1A28', '#18162A']}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <Text style={{ fontSize: 32 }}>🔥</Text>
+                  <View>
+                    <Text style={{ color: C.text, fontSize: 28, fontWeight: '900' }}>{rewards.loginStreak}</Text>
+                    <Text style={{ color: C.dim, fontSize: 10, fontWeight: '800' }}>day streak</Text>
+                  </View>
+                </View>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={{ color: C.dim, fontSize: 10, fontWeight: '800' }}>best streak</Text>
+                  <Text style={{ color: C.gold, fontSize: 16, fontWeight: '900' }}>{rewards.bestStreak} days</Text>
+                </View>
+              </View>
+              {nextMilestone && (
+                <View style={{ marginTop: 12, backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: 10 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Text style={{ color: C.dim, fontSize: 11, fontWeight: '800' }}>Next: {nextMilestone.emoji} {nextMilestone.label}</Text>
+                    <Text style={{ color: C.purple, fontSize: 11, fontWeight: '900' }}>+{nextMilestone.xp} XP</Text>
+                  </View>
+                  <View style={{ height: 6, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 3, marginTop: 6, overflow: 'hidden' }}>
+                    <View style={{ height: 6, borderRadius: 3, backgroundColor: C.purple, width: `${Math.min(100, (rewards.loginStreak / nextMilestone.days) * 100)}%` }} />
+                  </View>
+                  <Text style={{ color: C.faint, fontSize: 10, fontWeight: '700', marginTop: 4 }}>{nextMilestone.days - rewards.loginStreak} days to go</Text>
+                </View>
+              )}
+            </GlassCard>
+
+            <GlassCard style={{ marginTop: 8 }} colors={['#1A2418', '#162118']}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <Text style={{ fontSize: 28 }}>{tier.emoji}</Text>
+                  <View>
+                    <Text style={{ color: C.text, fontSize: 18, fontWeight: '900' }}>{tier.label}</Text>
+                    <Text style={{ color: C.dim, fontSize: 10, fontWeight: '800' }}>loyalty tier</Text>
+                  </View>
+                </View>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={{ color: C.accent, fontSize: 22, fontWeight: '900' }}>{rewards.xp}</Text>
+                  <Text style={{ color: C.dim, fontSize: 10, fontWeight: '800' }}>total XP</Text>
+                </View>
+              </View>
+              {nextTier && (
+                <View style={{ marginTop: 10 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                    <Text style={{ color: C.dim, fontSize: 10, fontWeight: '800' }}>Next: {nextTier.emoji} {nextTier.label}</Text>
+                    <Text style={{ color: C.faint, fontSize: 10, fontWeight: '700' }}>{nextTier.min - rewards.xp} XP to go</Text>
+                  </View>
+                  <View style={{ height: 6, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 3, marginTop: 4, overflow: 'hidden' }}>
+                    <View style={{ height: 6, borderRadius: 3, backgroundColor: C.accent, width: `${Math.min(100, ((rewards.xp - (XP_TIERS[XP_TIERS.indexOf(tier)]?.min || 0)) / (nextTier.min - (XP_TIERS[XP_TIERS.indexOf(tier)]?.min || 0))) * 100)}%` }} />
+                  </View>
+                </View>
+              )}
+            </GlassCard>
+
+            <GlassCard style={{ marginTop: 8 }} colors={['#1C2020', '#181E1E']}>
+              <Text style={[$.mealN, { fontSize: 14, marginBottom: 8 }]}>How to earn XP</Text>
+              {[
+                { emoji: '📱', label: 'Open app daily', xp: `+${XP_VALUES.login}` },
+                { emoji: '🔍', label: 'Search a food', xp: `+${XP_VALUES.search}` },
+                { emoji: '🍽️', label: 'View food detail (3x/day)', xp: `+${XP_VALUES.foodDetail}` },
+                { emoji: '💪', label: 'Coach check-in', xp: `+${XP_VALUES.coachCheckIn}` },
+              ].map(r => (
+                <View key={r.label} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 5 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Text style={{ fontSize: 16 }}>{r.emoji}</Text>
+                    <Text style={{ color: C.dim, fontSize: 12, fontWeight: '700' }}>{r.label}</Text>
+                  </View>
+                  <Text style={{ color: C.purple, fontSize: 12, fontWeight: '900' }}>{r.xp}</Text>
+                </View>
+              ))}
+            </GlassCard>
+
+            {earnedMilestones.length > 0 && (
+              <GlassCard style={{ marginTop: 8 }} colors={['#2A1F18', '#1E1814']}>
+                <Text style={[$.mealN, { fontSize: 14, marginBottom: 8 }]}>Milestones Earned</Text>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                  {earnedMilestones.map(m => (
+                    <View key={m.days} style={{ alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 14, padding: 10, borderWidth: 1, borderColor: `${C.gold}33`, minWidth: 72 }}>
+                      <Text style={{ fontSize: 24 }}>{m.emoji}</Text>
+                      <Text style={{ color: C.text, fontSize: 11, fontWeight: '900', marginTop: 4 }}>{m.label}</Text>
+                      <Text style={{ color: C.gold, fontSize: 10, fontWeight: '800' }}>+{m.xp} XP</Text>
+                    </View>
+                  ))}
+                </View>
+              </GlassCard>
+            )}
           </View>)}
 
           {/* ═══ ABOUT ═══ */}
@@ -694,9 +981,9 @@ export default function App() {
 
         {/* ── tab bar ── */}
         <LinearGradient colors={['#0F1A12F0', '#0A1410FA']} style={$.bar}>
-          {[['plan', '🥗', 'My Plan'], ['foods', '🍎', 'Foods'], ['premium', null, 'Premium'], ['about', 'ℹ️', 'About']].map(([id, em, lb]) => (
+          {[['plan', 'My Plan'], ['foods', 'Foods'], ['premium', 'Premium'], ['about', 'About']].map(([id, lb]) => (
             <Pressable key={id} onPress={() => setTab(id)} style={[$.barItem, tab === id && $.barOn]}>
-              {id === 'premium' ? <PremiumIcon size={21} active={tab === id} compact /> : <Text style={{ fontSize: 22 }}>{em}</Text>}
+              {id === 'premium' ? <PremiumIcon size={21} active={tab === id} compact /> : <TabIcon id={id} active={tab === id} />}
               <Text style={[$.barT, tab === id && $.barTOn]}>{lb}</Text>
             </Pressable>
           ))}
@@ -706,45 +993,43 @@ export default function App() {
 
       <FoodDetailModal food={selectedFood} visible={!!selectedFood} onClose={() => setSelectedFood(null)} hasFoodIntel={hasFoodIntel || hasPro} userGoal={profile.goal} />
 
-      {/* ── first-launch legal acceptance ── */}
-      <Modal transparent animationType="fade" visible={disclaimerAccepted === false}>
-        <SafeAreaView style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.85)' }}>
-          <LinearGradient colors={['#1A2B1E', '#162118', '#0F1A12']} style={{ flex: 1, padding: 20 }}>
-            <Text style={{ fontSize: 40, textAlign: 'center', marginTop: 8, marginBottom: 4 }}>⚕️</Text>
+      {/* ── first-launch legal acceptance (absolute overlay, NOT Modal) ── */}
+      {disclaimerAccepted === false && (
+        <View style={[$.legalModalBackdrop, { height: SCREEN_H }]} pointerEvents="auto">
+          <ScrollView style={{ width: '100%', height: SCREEN_H }} contentContainerStyle={$.legalModalScrollContent} showsVerticalScrollIndicator bounces nestedScrollEnabled>
+            <Text style={{ fontSize: 40, textAlign: 'center', marginTop: 4, marginBottom: 4 }}>⚕️</Text>
             <Text style={[$.mTitle, { textAlign: 'center', fontSize: 22 }]}>Terms, Privacy & Health Disclaimer</Text>
             <Text style={[$.mCat, { textAlign: 'center', marginBottom: 12 }]}>Please read before using DietPlanner, connecting a wallet, or buying premium features.</Text>
 
-            <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={true}>
-              <Text style={$.disclaimerH}>Not Medical Advice</Text>
-              <Text style={$.disclaimerP}>DietPlanner provides general nutritional information for educational purposes only. It is not intended to be, and should not be used as, a substitute for professional medical advice, diagnosis, or treatment.</Text>
+            <Text style={$.disclaimerH}>Not Medical Advice</Text>
+            <Text style={$.disclaimerP}>DietPlanner provides general nutritional information for educational purposes only. It is not intended to be, and should not be used as, a substitute for professional medical advice, diagnosis, or treatment.</Text>
 
-              <Text style={$.disclaimerH}>Consult a Professional</Text>
-              <Text style={$.disclaimerP}>Always consult a qualified healthcare provider or registered dietitian before making changes to your diet, especially if you have diabetes, kidney disease, eating disorders, food allergies, are pregnant or nursing, or take medication that interacts with food.</Text>
+            <Text style={$.disclaimerH}>Consult a Professional</Text>
+            <Text style={$.disclaimerP}>Always consult a qualified healthcare provider or registered dietitian before making changes to your diet, especially if you have diabetes, kidney disease, eating disorders, food allergies, are pregnant or nursing, or take medication that interacts with food.</Text>
 
-              <Text style={$.disclaimerH}>Data Sources</Text>
-              <Text style={$.disclaimerP}>Nutritional data is derived from the USDA FoodData Central database, NIH Dietary Supplement Fact Sheets, and WHO/FAO Dietary Guidelines. Calorie targets use the Mifflin-St Jeor equation, a peer-reviewed BMR estimation method. Individual results may vary.</Text>
+            <Text style={$.disclaimerH}>Data Sources</Text>
+            <Text style={$.disclaimerP}>Nutritional data is derived from the USDA FoodData Central database, NIH Dietary Supplement Fact Sheets, and WHO/FAO Dietary Guidelines. Calorie targets use the Mifflin-St Jeor equation, a peer-reviewed BMR estimation method. Individual results may vary.</Text>
 
-              <Text style={$.disclaimerH}>No Guarantees</Text>
-              <Text style={$.disclaimerP}>DietPlanner does not guarantee any health outcomes. Meal plans and food recommendations are algorithmically generated and may not account for your specific medical conditions, intolerances, or nutritional needs.</Text>
+            <Text style={$.disclaimerH}>No Guarantees</Text>
+            <Text style={$.disclaimerP}>DietPlanner does not guarantee any health outcomes. Meal plans and food recommendations are algorithmically generated and may not account for your specific medical conditions, intolerances, or nutritional needs.</Text>
 
-              <Text style={$.disclaimerH}>Premium Features</Text>
-              <Text style={$.disclaimerP}>Premium features are purchased using SKR tokens on the Solana blockchain. Your wallet pays the displayed SKR amount plus any SOL network fees. Blockchain transactions are public and generally irreversible. DietPlanner does not store or have access to your wallet private keys.</Text>
+            <Text style={$.disclaimerH}>Premium Features</Text>
+            <Text style={$.disclaimerP}>Premium features are purchased using SKR tokens on the Solana blockchain. Your wallet pays the displayed SKR amount plus any SOL network fees. Blockchain transactions are public and generally irreversible. DietPlanner does not store or have access to your wallet private keys.</Text>
 
-              <Text style={$.disclaimerH}>Legal Documents</Text>
-              <Text style={$.disclaimerP}>By accepting, you confirm that you are at least 18 years old and agree to the Terms of Service, Privacy Policy, and health/payment disclosures.</Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-                <Pressable onPress={() => Linking.openURL(LEGAL_URLS.terms)} style={$.legalLink}><Text style={$.legalLinkT}>Terms</Text></Pressable>
-                <Pressable onPress={() => Linking.openURL(LEGAL_URLS.privacy)} style={$.legalLink}><Text style={$.legalLinkT}>Privacy</Text></Pressable>
-                <Pressable onPress={() => Linking.openURL(LEGAL_URLS.copyright)} style={$.legalLink}><Text style={$.legalLinkT}>Copyright</Text></Pressable>
-              </View>
-            </ScrollView>
+            <Text style={$.disclaimerH}>Legal Documents</Text>
+            <Text style={$.disclaimerP}>By accepting, you confirm that you are at least 18 years old and agree to the Terms of Service, Privacy Policy, and health/payment disclosures.</Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+              <Pressable onPress={() => Linking.openURL(LEGAL_URLS.terms)} style={$.legalLink}><Text style={$.legalLinkT}>Terms</Text></Pressable>
+              <Pressable onPress={() => Linking.openURL(LEGAL_URLS.privacy)} style={$.legalLink}><Text style={$.legalLinkT}>Privacy</Text></Pressable>
+              <Pressable onPress={() => Linking.openURL(LEGAL_URLS.copyright)} style={$.legalLink}><Text style={$.legalLinkT}>Copyright</Text></Pressable>
+            </View>
 
-            <Pressable onPress={async () => { setDisclaimerAccepted(true); await SecureStore.setItemAsync('ds_legal_v1_ok', LEGAL_VERSION).catch(() => {}); }} style={[$.btnMain, { marginTop: 10, marginBottom: 4 }]}>
+            <Pressable onPress={async () => { setDisclaimerAccepted(true); await SecureStore.setItemAsync('ds_legal_v1_ok', LEGAL_VERSION).catch(() => {}); }} style={[$.btnMain, { marginTop: 8 }]}>
               <Text style={$.btnMainT}>I Agree & Confirm I Am 18+</Text>
             </Pressable>
-          </LinearGradient>
-        </SafeAreaView>
-      </Modal>
+          </ScrollView>
+        </View>
+      )}
 
       {toast && (
         <Animated.View style={[$.toast, toast.tone === 'ok' && $.toastOk, toast.tone === 'error' && $.toastErr, { opacity: toastAnim, transform: [{ translateY: toastAnim.interpolate({ inputRange: [0, 1], outputRange: [-30, 0] }) }] }]} pointerEvents="none">
@@ -784,6 +1069,8 @@ const $ = StyleSheet.create({
   aboutP: { color: C.dim, fontSize: 13, lineHeight: 20, marginBottom: 10 },
   disclaimerH: { color: C.text, fontSize: 14, fontWeight: '900', marginTop: 12, marginBottom: 4 },
   disclaimerP: { color: C.dim, fontSize: 12, lineHeight: 19, marginBottom: 8 },
+  legalModalBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#0F1A12', zIndex: 9999, elevation: 9999 },
+  legalModalScrollContent: { paddingHorizontal: 22, paddingTop: Platform.OS === 'android' ? 36 : 56, paddingBottom: Platform.OS === 'android' ? 48 : 60 },
   legalLink: { borderWidth: 1, borderColor: `${C.accent}44`, backgroundColor: `${C.accent}14`, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
   legalLinkT: { color: C.accent, fontSize: 12, fontWeight: '900' },
 

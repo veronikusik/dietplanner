@@ -43,4 +43,4 @@ DietPlanner is not affiliated with, endorsed by, or sponsored by Solana Foundati
 ## Contact
 
 For copyright inquiries:
-**veronikusik2005@gmail.com**
+**contact@dietplanner.fit**

@@ -21,6 +21,6 @@ DietPlanner provides educational nutrition information only. It is not medical a
 
 ## Developer
 
-Developer: Veronika Usik  
-Email: veronikusik2005@gmail.com  
+Developer: DietPlanner
+Email: contact@dietplanner.fit
 GitHub: https://github.com/veronikusik

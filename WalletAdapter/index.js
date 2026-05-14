@@ -13,31 +13,75 @@ const WALLET_STORAGE_KEY = 'dietplanner_connected_wallet';
 const WALLET_TYPE_KEY = 'dietplanner_wallet_type';
 const WALLET_LABEL_KEY = 'dietplanner_wallet_label';
 
-// Wallet types enum
+// Wallet types enum — each MWA-compatible wallet gets its own type so the
+// user can explicitly pick which installed wallet to route to.
 export const WALLET_TYPES = {
-  MWA: 'mwa',                    // Mobile Wallet Adapter (Seeker/Saga, Phantom Android, Solflare)
+  MWA: 'mwa',                    // Generic MWA fallback (system default = Seed Vault)
+  MWA_SEEDVAULT: 'mwa_seedvault',
+  MWA_PHANTOM: 'mwa_phantom',
+  MWA_SOLFLARE: 'mwa_solflare',
+  MWA_BACKPACK: 'mwa_backpack',
+  MWA_ULTIMATE: 'mwa_ultimate',
   PHANTOM: 'phantom',            // Phantom SDK (iOS/Android)
   WALLETCONNECT: 'walletconnect', // WalletConnect (Tangem, etc.)
   METAMASK: 'metamask',          // MetaMask (requires Solana Snap or bridge)
 };
 
+// MWA auto-discovers installed wallets via system intent resolver on Android.
+// No URI routing needed — the system shows a chooser if multiple wallets are installed.
+
 // Wallet metadata for UI
 export const WALLET_INFO = {
-  [WALLET_TYPES.MWA]: {
-    name: 'Mobile Wallet',
-    description: 'Seeker, Phantom, Solflare (Android)',
+  [WALLET_TYPES.MWA_SEEDVAULT]: {
+    name: 'Seed Vault',
+    description: 'Seeker built-in hardware wallet',
     icon: 'wallet',
     platforms: ['android'],
     priority: 1,
+    isMwa: true,
+  },
+  [WALLET_TYPES.MWA_PHANTOM]: {
+    name: 'Phantom',
+    description: 'Popular Solana wallet (MWA)',
+    icon: 'ghost',
+    platforms: ['android'],
+    priority: 2,
+    isMwa: true,
+    playStoreUrl: 'https://play.google.com/store/apps/details?id=app.phantom',
+  },
+  [WALLET_TYPES.MWA_SOLFLARE]: {
+    name: 'Solflare',
+    description: 'Full-featured Solana wallet (MWA)',
+    icon: 'hexagon',
+    platforms: ['android'],
+    priority: 3,
+    isMwa: true,
+    playStoreUrl: 'https://play.google.com/store/apps/details?id=com.solflare.mobile',
+  },
+  [WALLET_TYPES.MWA_BACKPACK]: {
+    name: 'Backpack',
+    description: 'Multi-chain wallet (MWA)',
+    icon: 'box',
+    platforms: ['android'],
+    priority: 4,
+    isMwa: true,
+    playStoreUrl: 'https://play.google.com/store/apps/details?id=app.backpack.mobile',
+  },
+  [WALLET_TYPES.MWA_ULTIMATE]: {
+    name: 'Ultimate',
+    description: 'Solana wallet (MWA)',
+    icon: 'credit-card',
+    platforms: ['android'],
+    priority: 5,
+    isMwa: true,
   },
   [WALLET_TYPES.PHANTOM]: {
-    name: 'Phantom',
-    description: 'Popular Solana wallet',
+    name: 'Phantom (deeplink)',
+    description: 'iOS deeplink connection',
     icon: 'ghost',
-    platforms: ['ios', 'android'],
-    priority: 2,
+    platforms: ['ios'],
+    priority: 6,
     appStoreUrl: 'https://apps.apple.com/app/phantom-solana-wallet/id1598432977',
-    playStoreUrl: 'https://play.google.com/store/apps/details?id=app.phantom',
     deepLink: 'phantom://',
   },
   [WALLET_TYPES.WALLETCONNECT]: {
@@ -45,14 +89,14 @@ export const WALLET_INFO = {
     description: 'Tangem, Trust Wallet, and more',
     icon: 'link',
     platforms: ['ios', 'android'],
-    priority: 3,
+    priority: 7,
   },
   [WALLET_TYPES.METAMASK]: {
     name: 'MetaMask',
     description: 'Via Solana bridge',
     icon: 'hexagon',
     platforms: ['ios', 'android'],
-    priority: 4,
+    priority: 8,
     appStoreUrl: 'https://apps.apple.com/app/metamask/id1438144202',
     playStoreUrl: 'https://play.google.com/store/apps/details?id=io.metamask',
     deepLink: 'metamask://',
@@ -176,6 +220,11 @@ const restoreConnection = async () => {
 const getAdapterForType = (type) => {
   switch (type) {
     case WALLET_TYPES.MWA:
+    case WALLET_TYPES.MWA_SEEDVAULT:
+    case WALLET_TYPES.MWA_PHANTOM:
+    case WALLET_TYPES.MWA_SOLFLARE:
+    case WALLET_TYPES.MWA_BACKPACK:
+    case WALLET_TYPES.MWA_ULTIMATE:
       return MWAAdapter;
     case WALLET_TYPES.PHANTOM:
     case WALLET_TYPES.WALLETCONNECT:
@@ -208,9 +257,15 @@ export const getAvailableWallets = async () => {
   const platform = Platform.OS;
   const available = [];
   
-  // TEMPORARILY HIDDEN: Only show MWA (native hardware wallet) for now
-  // Other wallets (Phantom, WalletConnect, MetaMask) are hidden but logic preserved for future development
-  const ENABLED_WALLET_TYPES = [WALLET_TYPES.MWA];
+  // Show all MWA wallet entries so the user can pick which installed wallet to use.
+  // Non-MWA types (deeplink Phantom iOS, WalletConnect, MetaMask) hidden for now.
+  const ENABLED_WALLET_TYPES = [
+    WALLET_TYPES.MWA_SEEDVAULT,
+    WALLET_TYPES.MWA_PHANTOM,
+    WALLET_TYPES.MWA_SOLFLARE,
+    WALLET_TYPES.MWA_BACKPACK,
+    WALLET_TYPES.MWA_ULTIMATE,
+  ];
   
   for (const [type, info] of Object.entries(WALLET_INFO)) {
     // Skip wallets that are not enabled (hidden for now)

@@ -69,4 +69,4 @@ We may update this Privacy Policy from time to time. The updated version will be
 ## Contact
 
 For privacy-related questions or concerns, contact:
-**veronikusik2005@gmail.com**
+**contact@dietplanner.fit**

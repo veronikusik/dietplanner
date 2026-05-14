@@ -91,8 +91,8 @@ android {
         applicationId 'com.veronikusik.dietplanner'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 100
-        versionName "1.0.0"
+        versionCode 101
+        versionName "1.0.1"
     }
     signingConfigs {
         debug {
@@ -102,10 +102,10 @@ android {
             keyPassword 'android'
         }
         release {
-            storeFile file(System.getenv("DIETPLANNER_UPLOAD_STORE_FILE") ?: (findProperty("DIETPLANNER_UPLOAD_STORE_FILE") ?: "dietplanner-release.keystore"))
-            storePassword System.getenv("DIETPLANNER_UPLOAD_STORE_PASSWORD") ?: findProperty("DIETPLANNER_UPLOAD_STORE_PASSWORD")
-            keyAlias System.getenv("DIETPLANNER_UPLOAD_KEY_ALIAS") ?: findProperty("DIETPLANNER_UPLOAD_KEY_ALIAS")
-            keyPassword System.getenv("DIETPLANNER_UPLOAD_KEY_PASSWORD") ?: findProperty("DIETPLANNER_UPLOAD_KEY_PASSWORD")
+            storeFile file('../../credentials/android/keystore.jks')
+            storePassword '822dbc3458b6e249380efbb357be1e2a'
+            keyAlias 'f611a71cfb3a3ad6e4e304081a2f74db'
+            keyPassword '9d932e99449cbce68f6971f46db85277'
         }
     }
     buildTypes {

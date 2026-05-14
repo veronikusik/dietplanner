@@ -1,6 +1,7 @@
 {
   "cli": {
-    "version": ">= 16.0.0"
+    "version": ">= 16.0.0",
+    "appVersionSource": "local"
   },
   "build": {
     "development": {
@@ -15,6 +16,7 @@
     },
     "production": {
       "distribution": "store",
+      "credentialsSource": "local",
       "android": {
         "buildType": "apk",
         "gradleCommand": ":app:assembleRelease"
@@ -22,6 +24,7 @@
     },
     "production-aab": {
       "distribution": "store",
+      "credentialsSource": "local",
       "android": {
         "buildType": "app-bundle",
         "gradleCommand": ":app:bundleRelease"

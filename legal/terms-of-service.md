@@ -97,4 +97,4 @@ These Terms are intended to apply worldwide to the maximum extent permitted by l
 ## 13. Contact
 
 For questions about these Terms, contact:
-**veronikusik2005@gmail.com**
+**contact@dietplanner.fit**

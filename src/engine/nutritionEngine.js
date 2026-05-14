@@ -1,4 +1,4 @@
-import { FOODS } from '../data/foods';
+import { FOODS } from '../data/foods.js';
 
 const ACTIVITY_MULTIPLIERS = {
   low: 1.2,
@@ -21,7 +21,18 @@ export function calculateBmr({ sex, weightKg, heightCm, age }) {
   return Math.round(base + (sex === 'female' ? -161 : 5));
 }
 
-export function calculatePlanTargets(profile) {
+const INTEREST_NUDGES = {
+  omega3:      { fatMul: 1.06 },
+  gut:         { fiberMul: 1.20 },
+  satiety:     { proteinMul: 1.08, fiberMul: 1.10 },
+  heart:       { fatMul: 1.04, fiberMul: 1.08 },
+  antioxidant: { fiberMul: 1.06 },
+  skin:        { fatMul: 1.04 },
+  hair:        { proteinMul: 1.05 },
+  mood:        { fatMul: 1.03, fiberMul: 1.05 },
+};
+
+export function calculatePlanTargets(profile, interests = []) {
   const safeProfile = {
     sex: profile.sex || 'male',
     weightKg: Number(profile.weightKg) || 80,
@@ -34,10 +45,13 @@ export function calculatePlanTargets(profile) {
   const bmr = calculateBmr(safeProfile);
   const tdee = Math.round(bmr * (ACTIVITY_MULTIPLIERS[safeProfile.activity] || ACTIVITY_MULTIPLIERS.light));
   const calories = Math.round(Math.max(1200, tdee * (1 + goalProfile.calorieShift)));
-  const protein = Math.round(safeProfile.weightKg * goalProfile.proteinPerKg);
-  const fat = Math.round((calories * goalProfile.fatRatio) / 9);
+  let proteinMul = 1, fatMul = 1, fiberMul = 1;
+  (interests || []).forEach(i => { const n = INTEREST_NUDGES[i]; if (n) { proteinMul *= (n.proteinMul || 1); fatMul *= (n.fatMul || 1); fiberMul *= (n.fiberMul || 1); } });
+  const protein = Math.round(safeProfile.weightKg * goalProfile.proteinPerKg * proteinMul);
+  const fat = Math.round((calories * goalProfile.fatRatio * fatMul) / 9);
   const carbs = Math.round(Math.max(60, (calories - protein * 4 - fat * 9) / 4));
-  const fiber = safeProfile.sex === 'female' ? 25 : 38;
+  const baseFiber = safeProfile.sex === 'female' ? 25 : 38;
+  const fiber = Math.round(baseFiber * fiberMul);
   return { bmr, tdee, calories, protein, fat, carbs, fiber };
 }
 
@@ -56,29 +70,70 @@ export function scoreFoods(goal, interests = []) {
   }).sort((a, b) => b.planScore - a.planScore);
 }
 
+/* ── meal slot definitions ──────────────────────────────────────────
+ * Each slot has a time-of-day, kind (main/snack), composition roles,
+ * and id-level allow/deny lists so foods land in appropriate meals.
+ *   - No coffee/yerba/green_tea/matcha at dinner (caffeine + late day)
+ *   - No salmon/chicken/beef-liver/kangaroo at breakfast
+ *   - Drinks limited to one per main meal
+ *   - Snacks are light: fruit/nuts/yogurt/dark chocolate/etc
+ */
+
+const ID = {
+  // Drinks
+  coffee: 'coffee', greenTea: 'green_tea', matcha: 'matcha', yerba: 'yerba_mate', water: 'water', kefir: 'kefir',
+};
+
+const CAFFEINATED_DRINKS = new Set(['coffee', 'green_tea', 'matcha', 'yerba_mate']);
+
+const BREAKFAST_PROTEIN_IDS = new Set([
+  'eggs', 'greek_yogurt', 'cottage_cheese', 'kefir', 'oats', 'tofu', 'chia_seeds', 'pumpkin_seeds', 'almonds',
+  'paneer', 'edamame',
+]);
+
+const BREAKFAST_CARB_IDS = new Set([
+  'oats', 'maize_porridge', 'fonio', 'sweet_potato', 'bulgur', 'rye_bread', 'quinoa', 'teff_injera', 'tortilla_corn',
+  'plantain', 'cassava', 'taro', 'banana',
+]);
+
+const FRUIT_CATS = new Set(['Fruit', 'Tropical fruit / fat']);
+const PLANT_CATS = new Set(['Leafy green', 'Cruciferous vegetable', 'Vegetable', 'Fruit / vegetable', 'Fermented vegetable', 'Root vegetable', 'Vegetable / fungi', 'Sea vegetable', 'Fermented soy soup', 'Legume dip']);
+const FAT_CATS = new Set(['Nut', 'Seed', 'Oil', 'Fruit / healthy fat', 'Seed paste']);
+const HEAVY_PROTEIN_CATS = new Set(['Fish', 'Seafood', 'Seafood dish', 'Lean protein', 'Lean game meat', 'Organ meat', 'Lentil dish', 'Legume', 'Soy / legume', 'Soy protein']);
+const ALL_PROTEIN_CATS = new Set([...HEAVY_PROTEIN_CATS, 'Protein', 'Dairy / fermented', 'Dairy', 'Fermented dairy', 'Fresh cheese', 'Cheese', 'Broth', 'Whole grain']); // grain only counts when it has decent protein
+const CARB_CATS = new Set(['Whole grain', 'Grain staple', 'African ancient grain', 'African fermented grain', 'Noodle / grain', 'Root staple', 'Starchy vegetable', 'Tropical starch', 'Whole grain bread', 'Maize staple']);
+
+const SNACK_ALLOW_IDS = new Set([
+  'apple', 'banana', 'blueberries', 'kiwi', 'orange', 'strawberries', 'watermelon',
+  'almonds', 'walnuts', 'chia_seeds', 'pumpkin_seeds',
+  'greek_yogurt', 'kefir', 'cottage_cheese', 'hummus', 'edamame', 'dark_chocolate', 'kimchi', 'sauerkraut',
+  'tahini', 'coconut',
+]);
+
+const DINNER_DENY_IDS = new Set(['coffee', 'green_tea', 'matcha', 'yerba_mate', 'dark_chocolate']);
+const DINNER_DENY_CATS = new Set(['Treat']);
+
+const BREAKFAST_DENY_CATS = new Set(['Fish', 'Seafood', 'Seafood dish', 'Lean protein', 'Lean game meat', 'Organ meat', 'Cheese']);
+
+const SLOT_DEFS = {
+  Breakfast: { kind: 'main', time: 'morning', share3: 0.30, share4: 0.25, share5: 0.22, drinkPool: ['coffee', 'green_tea', 'matcha', 'yerba_mate', 'kefir', 'water'], roles: ['breakfast_protein', 'breakfast_carb', 'fruit', 'drink'] },
+  Brunch:    { kind: 'main', time: 'morning', share2: 0.46,                                     drinkPool: ['coffee', 'green_tea', 'matcha', 'kefir', 'water'],          roles: ['breakfast_protein', 'breakfast_carb', 'plant', 'drink'] },
+  Lunch:     { kind: 'main', time: 'midday',  share3: 0.35, share4: 0.32, share5: 0.28,         drinkPool: ['water', 'green_tea', 'matcha', 'yerba_mate'],               roles: ['protein', 'carb', 'plant', 'fat'] },
+  Dinner:    { kind: 'main', time: 'evening', share2: 0.54, share3: 0.35, share4: 0.30, share5: 0.28, drinkPool: ['water', 'bone_broth', 'kefir'],                       roles: ['protein', 'plant', 'carb_or_plant', 'drink'] },
+  'Morning snack':   { kind: 'snack', time: 'morning', share5: 0.10, snackDrinkPool: ['coffee', 'green_tea', 'matcha', 'yerba_mate', 'water'], roles: ['snack_solid', 'snack_drink'] },
+  'Afternoon snack': { kind: 'snack', time: 'midday',  share4: 0.13, share5: 0.12, snackDrinkPool: ['green_tea', 'matcha', 'water', 'kefir'],   roles: ['snack_solid', 'snack_solid_alt'] },
+};
+
 function mealSchedule(mealsPerDay) {
-  if (mealsPerDay <= 2) return [
-    { name: 'Brunch', share: 0.46, kind: 'main' },
-    { name: 'Dinner', share: 0.54, kind: 'main' },
-  ];
-  if (mealsPerDay === 3) return [
-    { name: 'Breakfast', share: 0.3, kind: 'main' },
-    { name: 'Lunch', share: 0.35, kind: 'main' },
-    { name: 'Dinner', share: 0.35, kind: 'main' },
-  ];
-  if (mealsPerDay === 4) return [
-    { name: 'Breakfast', share: 0.25, kind: 'main' },
-    { name: 'Lunch', share: 0.32, kind: 'main' },
-    { name: 'Afternoon snack', share: 0.13, kind: 'snack' },
-    { name: 'Dinner', share: 0.3, kind: 'main' },
-  ];
-  return [
-    { name: 'Breakfast', share: 0.22, kind: 'main' },
-    { name: 'Morning snack', share: 0.1, kind: 'snack' },
-    { name: 'Lunch', share: 0.28, kind: 'main' },
-    { name: 'Afternoon snack', share: 0.12, kind: 'snack' },
-    { name: 'Dinner', share: 0.28, kind: 'main' },
-  ];
+  if (mealsPerDay <= 2) return ['Brunch', 'Dinner'];
+  if (mealsPerDay === 3) return ['Breakfast', 'Lunch', 'Dinner'];
+  if (mealsPerDay === 4) return ['Breakfast', 'Lunch', 'Afternoon snack', 'Dinner'];
+  return ['Breakfast', 'Morning snack', 'Lunch', 'Afternoon snack', 'Dinner'];
+}
+
+function shareFor(slotName, mealsPerDay) {
+  const def = SLOT_DEFS[slotName];
+  return def[`share${mealsPerDay}`] || def.share3 || 0.25;
 }
 
 function uniqueItems(items) {
@@ -90,48 +145,118 @@ function uniqueItems(items) {
   });
 }
 
+function passesTimeFilter(food, time) {
+  if (time === 'evening' && (DINNER_DENY_IDS.has(food.id) || DINNER_DENY_CATS.has(food.category))) return false;
+  if (time === 'morning' && BREAKFAST_DENY_CATS.has(food.category)) return false;
+  return true;
+}
+
+function pickFromPool(ranked, predicate, used, time) {
+  for (const f of ranked) {
+    if (used.has(f.id)) continue;
+    if (!passesTimeFilter(f, time)) continue;
+    if (predicate(f)) return f;
+  }
+  // fallback: ignore "used" but still respect time filter
+  for (const f of ranked) {
+    if (!passesTimeFilter(f, time)) continue;
+    if (predicate(f)) return f;
+  }
+  return null;
+}
+
+const ROLE_PREDICATES = {
+  breakfast_protein: f => BREAKFAST_PROTEIN_IDS.has(f.id) || (f.protein >= 9 && (f.category.includes('Dairy') || f.category.includes('fermented') || f.category === 'Protein' || f.category === 'Whole grain' || f.category === 'Soy protein' || f.category === 'Soy / legume')),
+  breakfast_carb:    f => BREAKFAST_CARB_IDS.has(f.id) || (CARB_CATS.has(f.category) && f.fiber >= 2),
+  protein:           f => f.protein >= 9 && ALL_PROTEIN_CATS.has(f.category) && f.category !== 'Whole grain',
+  carb:              f => CARB_CATS.has(f.category) || f.category === 'Legume' || f.category === 'Lentil dish',
+  plant:             f => PLANT_CATS.has(f.category) || (f.category === 'Fruit / healthy fat'),
+  fruit:             f => FRUIT_CATS.has(f.category) || f.id === 'avocado',
+  fat:               f => FAT_CATS.has(f.category),
+  carb_or_plant:     f => CARB_CATS.has(f.category) || PLANT_CATS.has(f.category),
+  snack_solid:       f => SNACK_ALLOW_IDS.has(f.id),
+  snack_solid_alt:   f => SNACK_ALLOW_IDS.has(f.id),
+  snack_drink:       () => false, // handled separately
+  drink:             () => false, // handled separately
+};
+
+function pickDrink(ranked, drinkPool, used) {
+  for (const id of drinkPool) {
+    if (used.has(id)) continue;
+    const f = ranked.find(x => x.id === id);
+    if (f) return f;
+  }
+  // fallback: any drink not yet used
+  const anyDrink = ranked.find(x => x.category === 'Drink' && !used.has(x.id));
+  if (anyDrink) return anyDrink;
+  // last resort: water (may repeat but extremely unlikely)
+  return ranked.find(x => x.id === 'water') || null;
+}
+
+function buildSlot(slotName, ranked, used, goalProfile) {
+  const def = SLOT_DEFS[slotName];
+  const isStrength = goalProfile === GOAL_PROFILES.strength;
+  const isWeightLoss = goalProfile === GOAL_PROFILES.weight_loss;
+  const items = [];
+
+  for (const role of def.roles) {
+    let pick = null;
+    if (role === 'drink' || role === 'snack_drink') {
+      pick = pickDrink(ranked, def.drinkPool || def.snackDrinkPool || ['water'], used);
+    } else if (role === 'protein' && isStrength) {
+      // strength gets two protein sources at lunch/dinner — handled by adding extra below
+      pick = pickFromPool(ranked, ROLE_PREDICATES.protein, used, def.time);
+    } else if (ROLE_PREDICATES[role]) {
+      pick = pickFromPool(ranked, ROLE_PREDICATES[role], used, def.time);
+    }
+    if (pick) { items.push(pick); used.add(pick.id); }
+  }
+
+  // Goal-specific extras
+  if (def.kind === 'main' && isStrength && def.time !== 'morning') {
+    const extra = pickFromPool(ranked, f => ROLE_PREDICATES.protein(f) && !items.some(i => i.id === f.id), used, def.time);
+    if (extra) { items.push(extra); used.add(extra.id); }
+  }
+  if (def.kind === 'main' && isWeightLoss && def.time !== 'evening') {
+    // ensure a high-fiber plant for satiety
+    const fiberPlant = pickFromPool(ranked, f => (PLANT_CATS.has(f.category) || FRUIT_CATS.has(f.category)) && f.fiber >= 3 && !items.some(i => i.id === f.id), used, def.time);
+    if (fiberPlant) { items.push(fiberPlant); used.add(fiberPlant.id); }
+  }
+
+  return uniqueItems(items).slice(0, def.kind === 'snack' ? 2 : 5);
+}
+
 export function generateDailyPlan(profile, interests = []) {
-  const targets = calculatePlanTargets(profile);
+  return generateDailyPlanCore(profile, interests, 0);
+}
+
+function generateDailyPlanCore(profile, interests, daySeed) {
+  const targets = calculatePlanTargets(profile, interests);
   const mealsPerDay = Math.min(5, Math.max(2, Number(profile.mealsPerDay) || 3));
-  const ranked = scoreFoods(profile.goal, interests);
-  const proteins = ranked.filter(f => f.protein >= 9);
-  const plants = ranked.filter(f => f.fiber >= 2 || f.category.includes('Fruit') || f.category.includes('vegetable'));
-  const drinks = ranked.filter(f => f.category === 'Drink');
-  const fats = ranked.filter(f => f.fat >= 10 && f.calories >= 100);
-  const snackFoods = ranked.filter(f =>
-    f.category.includes('Fruit') ||
-    f.category.includes('Drink') ||
-    f.category.includes('Nut') ||
-    f.category.includes('Seed') ||
-    f.category.includes('Dairy') ||
-    f.category.includes('fermented') ||
-    f.id.includes('yogurt') ||
-    f.id.includes('chocolate')
-  );
-  const schedule = mealSchedule(mealsPerDay);
-  const meals = schedule.map((slot, index) => {
-    const calorieShare = slot.share;
-    const mealCalories = Math.round(targets.calories * calorieShare);
-    const isSnack = slot.kind === 'snack';
-    const protein = proteins[index % proteins.length] || ranked[index % ranked.length];
-    const plant = plants[(index + 1) % plants.length] || ranked[(index + 2) % ranked.length];
-    const booster = index % 3 === 0 ? (fats[index % fats.length] || ranked[0]) : ranked[(index + 3) % ranked.length];
-    const snackA = snackFoods[index % snackFoods.length] || plant;
-    const snackB = snackFoods[(index + 2) % snackFoods.length] || drinks[0] || ranked[index % ranked.length];
-    const drink = drinks[index % drinks.length] || null;
-    const items = isSnack
-      ? uniqueItems([snackA, snackB].filter(Boolean)).slice(0, 2)
-      : uniqueItems([protein, plant, booster, drink].filter(Boolean)).slice(0, 4);
-    const approxProtein = Math.round(items.reduce((sum, item) => sum + item.protein, 0));
-    const approxFiber = Math.round(items.reduce((sum, item) => sum + item.fiber, 0));
+  const goal = profile.goal || 'weight_loss';
+  const goalProfile = GOAL_PROFILES[goal] || GOAL_PROFILES.weight_loss;
+  let ranked = scoreFoods(goal, interests);
+  // rotate for the seed so the weekly plan varies per day
+  if (daySeed > 0) {
+    const k = daySeed % ranked.length;
+    ranked = ranked.slice(k).concat(ranked.slice(0, k));
+  }
+  const used = new Set();
+  const slotNames = mealSchedule(mealsPerDay);
+  const meals = slotNames.map((slotName, index) => {
+    const def = SLOT_DEFS[slotName];
+    const items = buildSlot(slotName, ranked, used, goalProfile);
+    const mealCalories = Math.round(targets.calories * shareFor(slotName, mealsPerDay));
     return {
-      id: `meal_${index}`,
-      name: slot.name,
+      id: `meal_${daySeed}_${index}`,
+      name: slotName,
+      kind: def.kind,
+      time: def.time,
       calories: mealCalories,
-      protein: approxProtein,
-      fiber: approxFiber,
+      protein: Math.round(items.reduce((s, it) => s + it.protein, 0)),
+      fiber: Math.round(items.reduce((s, it) => s + it.fiber, 0)),
       items,
-      why: buildMealWhy(profile.goal, items),
+      why: buildMealWhy(goal, items, slotName),
     };
   });
   return { targets, rankedFoods: ranked, meals };
@@ -139,55 +264,11 @@ export function generateDailyPlan(profile, interests = []) {
 
 export function generateWeeklyPlan(profile, interests = []) {
   const days = [];
-  const usedIds = new Set();
   for (let d = 0; d < 7; d++) {
-    const shifted = { ...profile, _daySeed: d };
-    const day = generateDailyPlanSeeded(shifted, interests, usedIds, d);
-    day.meals.forEach(m => m.items.forEach(it => usedIds.add(it.id)));
+    const day = generateDailyPlanCore(profile, interests, d);
     days.push({ dayIndex: d, dayLabel: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][d], ...day });
   }
   return days;
-}
-
-function generateDailyPlanSeeded(profile, interests, usedIds, daySeed) {
-  const targets = calculatePlanTargets(profile);
-  const mealsPerDay = Math.min(5, Math.max(2, Number(profile.mealsPerDay) || 3));
-  const ranked = scoreFoods(profile.goal, interests);
-  const offset = daySeed * 5;
-  const proteins = ranked.filter(f => f.protein >= 9);
-  const plants = ranked.filter(f => f.fiber >= 2 || f.category.includes('Fruit') || f.category.includes('vegetable'));
-  const drinks = ranked.filter(f => f.category === 'Drink');
-  const fats = ranked.filter(f => f.fat >= 10 && f.calories >= 100);
-  const snackFoods = ranked.filter(f =>
-    f.category.includes('Fruit') || f.category.includes('Drink') || f.category.includes('Nut') ||
-    f.category.includes('Seed') || f.category.includes('Dairy') || f.category.includes('fermented') ||
-    f.id.includes('yogurt') || f.id.includes('chocolate')
-  );
-  const schedule = mealSchedule(mealsPerDay);
-  const meals = schedule.map((slot, index) => {
-    const i = (index + offset) % ranked.length;
-    const mealCalories = Math.round(targets.calories * slot.share);
-    const isSnack = slot.kind === 'snack';
-    const protein = proteins[(i) % proteins.length] || ranked[i % ranked.length];
-    const plant = plants[(i + 1) % plants.length] || ranked[(i + 2) % ranked.length];
-    const booster = i % 3 === 0 ? (fats[i % fats.length] || ranked[0]) : ranked[(i + 3) % ranked.length];
-    const snackA = snackFoods[i % snackFoods.length] || plant;
-    const snackB = snackFoods[(i + 2) % snackFoods.length] || drinks[0] || ranked[i % ranked.length];
-    const drink = drinks[i % drinks.length] || null;
-    const items = isSnack
-      ? uniqueItems([snackA, snackB].filter(Boolean)).slice(0, 2)
-      : uniqueItems([protein, plant, booster, drink].filter(Boolean)).slice(0, 4);
-    return {
-      id: `meal_${daySeed}_${index}`,
-      name: slot.name,
-      calories: mealCalories,
-      protein: Math.round(items.reduce((s, it) => s + it.protein, 0)),
-      fiber: Math.round(items.reduce((s, it) => s + it.fiber, 0)),
-      items,
-      why: buildMealWhy(profile.goal, items),
-    };
-  });
-  return { targets, meals };
 }
 
 export function buildGroceryList(weeklyPlan) {
@@ -203,7 +284,8 @@ export function buildGroceryList(weeklyPlan) {
   return Object.values(map).sort((a, b) => b.count - a.count);
 }
 
-function buildMealWhy(goal, items) {
+function buildMealWhy(goal, items, slotName) {
+  if (!items || items.length === 0) return '';
   const names = items.map(i => i.name).join(', ');
   const goalText = {
     weight_loss: 'high-satiety protein, fiber, and low-energy-density choices',
@@ -213,7 +295,8 @@ function buildMealWhy(goal, items) {
     strength: 'protein distribution, minerals, and training-friendly carbohydrates',
     healthy_aging: 'colorful plants, unsaturated fats, fiber, and micronutrient density',
   }[goal] || 'balanced nutrition';
-  return `${names} are paired for ${goalText}.`;
+  const slotText = slotName ? `${slotName.toLowerCase()}: ` : '';
+  return `${slotText}${names} — paired for ${goalText}.`;
 }
 
 export function searchFoods(query) {

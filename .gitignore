@@ -5,6 +5,9 @@ build/
 android/.gradle/
 android/build/
 android/app/build/
+android/app/.cxx/
+android/app/release/
+android/.cxx/
 *.apk
 *.aab
 *.apks

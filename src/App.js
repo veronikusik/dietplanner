@@ -17,9 +17,9 @@ const SCREEN_H = Dimensions.get('window').height;
 const C = { bg: '#0F1A12', card: '#162118', accent: '#34D399', gold: '#FBBF24', coral: '#FB7185', blue: '#60A5FA', purple: '#A78BFA', text: '#F1F5F0', dim: 'rgba(241,245,240,0.5)', faint: 'rgba(241,245,240,0.25)' };
 const LEGAL_VERSION = '2026-05-10';
 const LEGAL_URLS = {
-  privacy: 'https://veronikusik.github.io/dietplanner/privacy.html',
-  terms: 'https://veronikusik.github.io/dietplanner/terms.html',
-  copyright: 'https://veronikusik.github.io/dietplanner/copyright.html',
+  privacy: 'https://dietplanner.fit/privacy.html',
+  terms: 'https://dietplanner.fit/terms.html',
+  copyright: 'https://dietplanner.fit/copyright.html',
 };
 
 const isActive = (e) => !!(e && (e.expiresAt == null || e.expiresAt > Date.now()));
@@ -59,9 +59,18 @@ const BACKUP_FILE = `${FileSystem.documentDirectory}dietplanner_backup.json`;
 const saveBackup = async (data) => { try { await FileSystem.writeAsStringAsync(BACKUP_FILE, JSON.stringify(data)); } catch (_) {} };
 const loadBackup = async () => { try { const raw = await FileSystem.readAsStringAsync(BACKUP_FILE); return JSON.parse(raw); } catch (_) { return null; } };
 
+// SKR-paid feature catalogue. Pricing here is the single source of truth and
+// MUST match the IAP table in `dapp-store/listing.md` — Solana dApp Store
+// reviewers compare those two for parity and a mismatch is a rejection
+// trigger.
+//
+// Language note: descriptions are intentionally educational. Avoid wording
+// that strays into medical claims (treat / diagnose / prevent / cure) or
+// disease-prediction (obesity / aging impact / risk reduction) because the
+// EU MDR 2017/745 classifies apps making those claims as medical devices.
 const SKR_FEATURES = [
-  { id: 'dietplanner_pro_monthly', title: 'AI Chef Pro', price: '100 SKR / mo', emoji: '📅', detail: '30-day rotating meal calendars and adaptive grocery lists.', type: 'Monthly plan', unlocks: ['30-day meal calendar', 'Smart grocery lists', 'Meal prep schedule', 'Saved favorite plans'] },
-  { id: 'dietplanner_food_report', title: 'Deep Food Intel', price: '50 SKR', emoji: '📋', detail: 'Full food-vs-goal report with vitamins, obesity & aging impact.', type: 'One-time report', unlocks: ['Goal fit analysis', 'Vitamin/mineral strengths', 'Health cautions', 'Better substitutions'] },
+  { id: 'dietplanner_pro_monthly', title: 'AI Chef Pro', price: '100 SKR / mo', emoji: '📅', detail: '30-day rotating meal calendars and adaptive grocery lists. AI-assisted output — verify allergens and macros before use.', type: 'Monthly plan', ai: true, unlocks: ['30-day meal calendar', 'Smart grocery lists', 'Meal prep schedule', 'Saved favorite plans'] },
+  { id: 'dietplanner_food_report', title: 'Deep Food Intel', price: '50 SKR', emoji: '📋', detail: 'Goal-fit report with vitamin and mineral notes, dietary cautions, and suggested substitutions.', type: 'One-time report', unlocks: ['Goal fit analysis', 'Vitamin/mineral notes', 'Dietary cautions', 'Suggested substitutions'] },
   { id: 'dietplanner_daily_coach', title: 'Micro-Coach', price: '10 SKR / day', emoji: '💪', detail: 'Daily on-chain check-in, streak badge, and wallet-linked progress.', type: 'Daily pass', unlocks: ['Daily check-in', 'Nutrition streak', 'Habit nudges', 'Wallet accountability'] },
 ];
 
@@ -233,6 +242,15 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [entitlements, setEntitlements] = useState({});
   const [purchaseIntents, setPurchaseIntents] = useState({});
+  // Per-purchase consent gate. When the user taps "Buy", we DON'T immediately
+  // call buySkr — we stage the feature here and render a confirmation modal
+  // that itemises the on-chain transfer (SKR amount, treasury wallet, SOL
+  // network fee, irreversibility) and requires an explicit checkbox before
+  // the wallet popup is allowed to appear. Required by both consumer-
+  // protection law (EU right-to-be-informed for digital purchases) and the
+  // Solana dApp Store payment guidelines (no transaction can be initiated
+  // without explicit per-purchase user approval).
+  const [pendingPurchase, setPendingPurchase] = useState(null); // null | { feature, consent: bool, busy: bool }
   const [, setNowTick] = useState(Date.now());
   const [weekDay, setWeekDay] = useState(0);
   const [coachCheckedIn, setCoachCheckedIn] = useState(false);
@@ -468,17 +486,38 @@ export default function App() {
   const up = (k, v) => setProfile(p => ({ ...p, [k]: v }));
   const tog = (v) => setInterests(p => p.includes(v) ? p.filter(x => x !== v) : [...p, v]);
 
-  const buySkr = async (f) => {
+  // Step 1 — user tapped "Buy". Run the cheap pre-checks (legal gate, already
+  // active) then open the per-purchase consent modal. The wallet popup is
+  // NOT shown here; that only happens after the user explicitly ticks the
+  // consent checkbox in the modal and taps "Confirm & Sign".
+  const buySkr = (f) => {
     if (!disclaimerAccepted) {
       setDisclaimerAccepted(false);
       showToast('Please accept the Terms, Privacy Policy, and payment disclosures before purchasing.', 'error');
       return;
     }
-    if (isActive(entitlements[f.id])) { showToast(`${f.title} is already active.`, 'ok'); return; }
+    if (isActive(entitlements[f.id])) {
+      showToast(`${f.title} is already active.`, 'ok');
+      return;
+    }
+    setPendingPurchase({ feature: f, consent: false, busy: false });
+  };
+
+  // Step 2 — runs only after the user has explicitly consented in the modal.
+  // Connects the wallet if needed, builds the SKR transfer intent, dispatches
+  // to MWA for signing, and persists the entitlement on confirmation.
+  const confirmPurchase = async () => {
+    const cur = pendingPurchase;
+    if (!cur || !cur.consent || cur.busy) return;
+    const f = cur.feature;
+    setPendingPurchase({ ...cur, busy: true });
     let walletAddr = wallet;
     if (!walletAddr) {
       const res = await connectWallet();
-      if (!res || !res.success) return;
+      if (!res || !res.success) {
+        setPendingPurchase((p) => p ? { ...p, busy: false } : p);
+        return;
+      }
       walletAddr = res.address;
     }
     try {
@@ -487,17 +526,22 @@ export default function App() {
       if (res.success) {
         const expiresAt = f.id === 'dietplanner_pro_monthly' ? Date.now() + 30 * 86400000 : f.id === 'dietplanner_daily_coach' ? Date.now() + 86400000 : null;
         setEntitlements(p => ({ ...p, [f.id]: { productId: f.id, title: f.title, activatedAt: Date.now(), expiresAt, tx: res.signature || null } }));
+        setPendingPurchase(null);
         showToast(`${f.title} activated.`, 'ok');
       } else if (res.missingMint) {
         setPurchaseIntents(p => ({ ...p, [f.id]: { ...intent, createdAt: Date.now(), nextStep: res.nextStep } }));
+        setPendingPurchase((p) => p ? { ...p, busy: false } : p);
         showToast('SKR mint address is required before real payments can run.', 'error');
       } else if (res.pendingImplementation) {
         setPurchaseIntents(p => ({ ...p, [f.id]: { ...intent, createdAt: Date.now(), nextStep: res.nextStep } }));
+        setPendingPurchase((p) => p ? { ...p, busy: false } : p);
         showToast('Payment transfer is not wired yet. Intent saved as pending.', 'error');
       } else {
+        setPendingPurchase((p) => p ? { ...p, busy: false } : p);
         showToast(res.error || 'Purchase could not be completed.', 'error');
       }
     } catch (e) {
+      setPendingPurchase((p) => p ? { ...p, busy: false } : p);
       const msg = e.message || '';
       if (msg.includes('Cancel') || msg.includes('cancel') || msg.includes('rejected') || msg.includes('Rejected')) {
         showToast('Payment cancelled.', 'error');
@@ -934,7 +978,7 @@ export default function App() {
           {tab === 'about' && (<View>
             <Text style={{ fontSize: 40, marginBottom: 4 }}>🌿</Text>
             <Text style={$.secT}>About DietPlanner</Text>
-            <Text style={$.secS}>Version 1.0.0</Text>
+            <Text style={$.secS}>Version 1.0.2</Text>
             <GlassCard style={{ marginTop: 12 }}>
               <Text style={$.aboutP}>DietPlanner helps you explore nutrition, plan meals, and understand how food impacts your body and goals.</Text>
               <Text style={$.aboutP}>Uses the Mifflin-St Jeor equation for BMR, USDA FoodData Central for nutrition facts, and NIH / Dietary Guidelines for health context.</Text>
@@ -1030,6 +1074,95 @@ export default function App() {
           </ScrollView>
         </View>
       )}
+
+      {/* ── per-purchase consent modal (shown BEFORE wallet popup) ── */}
+      {pendingPurchase && (() => {
+        const f = pendingPurchase.feature;
+        const intentPreview = (() => {
+          try { return buildSkrPaymentIntent({ productId: f.id, walletAddress: wallet || 'PLACEHOLDER_WALLET_ADDRESS_FOR_PREVIEW_OF_AMOUNT' }); }
+          catch (_) { return null; }
+        })();
+        const amountLabel = intentPreview ? `${intentPreview.amountSkr} SKR` : f.price;
+        const periodLabel = f.id === 'dietplanner_pro_monthly' ? '30 days' : f.id === 'dietplanner_daily_coach' ? '24 hours' : 'one-time';
+        const canConfirm = pendingPurchase.consent && !pendingPurchase.busy;
+        return (
+          <View style={[$.legalModalBackdrop, { height: SCREEN_H, backgroundColor: 'rgba(0,0,0,0.94)' }]} pointerEvents="auto">
+            <ScrollView style={{ width: '100%', height: SCREEN_H }} contentContainerStyle={[$.legalModalScrollContent, { paddingTop: Platform.OS === 'android' ? 60 : 80 }]} showsVerticalScrollIndicator bounces>
+              <Text style={{ fontSize: 36, textAlign: 'center', marginBottom: 4 }}>{f.emoji}</Text>
+              <Text style={[$.mTitle, { textAlign: 'center', fontSize: 20 }]}>Confirm purchase</Text>
+              <Text style={[$.mCat, { textAlign: 'center', marginBottom: 14 }]}>Please review the on-chain transfer before signing.</Text>
+
+              {/* Itemised receipt */}
+              <View style={{ borderWidth: 1, borderColor: `${C.accent}33`, backgroundColor: `${C.accent}0d`, borderRadius: 16, padding: 14, marginBottom: 14 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={{ color: C.dim, fontSize: 12, fontWeight: '700' }}>Feature</Text>
+                  <Text style={{ color: C.text, fontSize: 13, fontWeight: '900' }}>{f.title}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={{ color: C.dim, fontSize: 12, fontWeight: '700' }}>Access</Text>
+                  <Text style={{ color: C.text, fontSize: 13, fontWeight: '900' }}>{periodLabel}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={{ color: C.dim, fontSize: 12, fontWeight: '700' }}>You pay</Text>
+                  <Text style={{ color: C.accent, fontSize: 15, fontWeight: '900' }}>{amountLabel}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={{ color: C.dim, fontSize: 12, fontWeight: '700' }}>Plus</Text>
+                  <Text style={{ color: C.text, fontSize: 12 }}>SOL network fee (~&lt; $0.01)</Text>
+                </View>
+                <View style={{ marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.08)' }}>
+                  <Text style={{ color: C.dim, fontSize: 11, fontWeight: '700', marginBottom: 2 }}>Sent to (DietPlanner treasury)</Text>
+                  <Text style={{ color: C.faint, fontSize: 10, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' }}>{SKR_TREASURY_WALLET}</Text>
+                </View>
+              </View>
+
+              {/* Disclosures */}
+              <Text style={$.disclaimerH}>Before you sign</Text>
+              <Text style={$.disclaimerP}>• Solana transactions are public and <Text style={{ fontWeight: '900' }}>irreversible</Text>. DietPlanner cannot refund, reverse, or cancel a confirmed transfer.</Text>
+              <Text style={$.disclaimerP}>• The exact SKR amount and treasury wallet shown above will be transferred from your connected wallet when you sign in your wallet app.</Text>
+              <Text style={$.disclaimerP}>• This unlocks digital content inside DietPlanner only. It is not an investment, security, or financial product.</Text>
+              <Text style={$.disclaimerP}>• DietPlanner provides educational nutrition information; it is not medical advice and your purchase does not change that.</Text>
+
+              {/* Consent checkbox */}
+              <Pressable
+                onPress={() => setPendingPurchase((p) => p ? { ...p, consent: !p.consent } : p)}
+                disabled={pendingPurchase.busy}
+                style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginTop: 6, marginBottom: 14, padding: 12, borderRadius: 14, borderWidth: 1.5, borderColor: pendingPurchase.consent ? C.accent : 'rgba(255,255,255,0.12)', backgroundColor: pendingPurchase.consent ? `${C.accent}1a` : 'transparent' }}
+              >
+                <View style={{ width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: pendingPurchase.consent ? C.accent : C.faint, backgroundColor: pendingPurchase.consent ? C.accent : 'transparent', alignItems: 'center', justifyContent: 'center', marginTop: 1 }}>
+                  {pendingPurchase.consent && <Text style={{ color: '#0F1A12', fontWeight: '900', fontSize: 14 }}>✓</Text>}
+                </View>
+                <Text style={{ color: C.text, fontSize: 12, lineHeight: 18, flex: 1 }}>
+                  I have reviewed the amount, treasury wallet and access period above. I agree to the{' '}
+                  <Text style={{ color: C.accent, fontWeight: '900' }} onPress={() => Linking.openURL(LEGAL_URLS.terms)}>Terms</Text>
+                  ,{' '}
+                  <Text style={{ color: C.accent, fontWeight: '900' }} onPress={() => Linking.openURL(LEGAL_URLS.privacy)}>Privacy Policy</Text>
+                  , and the health disclaimer. I understand the transfer is final and non-refundable, and that DietPlanner is not medical advice.
+                </Text>
+              </Pressable>
+
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                <Pressable
+                  onPress={() => setPendingPurchase(null)}
+                  disabled={pendingPurchase.busy}
+                  style={{ flex: 1, borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.16)', borderRadius: 16, paddingVertical: 14, alignItems: 'center', opacity: pendingPurchase.busy ? 0.5 : 1 }}
+                >
+                  <Text style={{ color: C.dim, fontWeight: '900', fontSize: 14 }}>Cancel</Text>
+                </Pressable>
+                <Pressable
+                  onPress={confirmPurchase}
+                  disabled={!canConfirm}
+                  style={[$.btnMain, { flex: 1, marginTop: 0, paddingVertical: 14, opacity: canConfirm ? 1 : 0.4 }]}
+                >
+                  <Text style={$.btnMainT}>
+                    {pendingPurchase.busy ? 'Signing…' : 'Confirm & Sign'}
+                  </Text>
+                </Pressable>
+              </View>
+            </ScrollView>
+          </View>
+        );
+      })()}
 
       {toast && (
         <Animated.View style={[$.toast, toast.tone === 'ok' && $.toastOk, toast.tone === 'error' && $.toastErr, { opacity: toastAnim, transform: [{ translateY: toastAnim.interpolate({ inputRange: [0, 1], outputRange: [-30, 0] }) }] }]} pointerEvents="none">

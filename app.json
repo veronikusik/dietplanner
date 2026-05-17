@@ -2,7 +2,7 @@
   "expo": {
     "name": "DietPlanner",
     "slug": "dietplanner",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "splash": {
@@ -21,9 +21,9 @@
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#0F1A12"
       },
-      "package": "com.veronikusik.dietplanner",
-      "versionCode": 101,
-      "allowBackup": true,
+      "package": "fit.dietplanner",
+      "versionCode": 102,
+      "allowBackup": false,
       "permissions": [
         "INTERNET",
         "RECEIVE_BOOT_COMPLETED",
@@ -45,7 +45,7 @@
               "scheme": "dietplanner"
             },
             {
-              "scheme": "com.veronikusik.dietplanner"
+              "scheme": "fit.dietplanner"
             }
           ],
           "category": [
@@ -69,10 +69,10 @@
       },
       "repository": "https://github.com/veronikusik/dietplanner",
       "legal": {
-        "privacyPolicy": "https://veronikusik.github.io/dietplanner/privacy.html",
-        "termsOfService": "https://veronikusik.github.io/dietplanner/terms.html",
-        "healthDisclaimer": "https://veronikusik.github.io/dietplanner/health-disclaimer.html",
-        "copyright": "https://veronikusik.github.io/dietplanner/copyright.html"
+        "privacyPolicy": "https://dietplanner.fit/privacy.html",
+        "termsOfService": "https://dietplanner.fit/terms.html",
+        "healthDisclaimer": "https://dietplanner.fit/health-disclaimer.html",
+        "copyright": "https://dietplanner.fit/copyright.html"
       },
       "eas": {
         "projectId": "a29b6413-5a78-45a8-89af-4d47d1cdbe67"

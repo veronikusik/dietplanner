@@ -1,37 +1,115 @@
+# Solana dApp Store publishing manifest.
+# Schema: https://docs.solanamobile.com/dapp-publishing/setup
+#
+# This file follows the OFFICIAL CLI schema (publisher / app / release).
+# The previous custom format used non-standard top-level keys (developer,
+# listing, solana, build) which the CLI silently ignores, leaving the
+# `publisher.website` field blank in the submitted metadata — which is
+# exactly what the dApp Store reviewer kept flagging as the "missing
+# Developer Website" policy violation.
+
+publisher:
+  # Publicly-shown publisher name. Appears next to the app on the store.
+  name: DietPlanner
+  # Solana address that owns the Publisher NFT. Filled in by the CLI on
+  # `npx dapp-store create publisher`. Leave blank for the initial mint.
+  address:
+  # ★ The "Developer Website" the rejection cited. Solana dApp Store
+  # policy requires this to be a DEDICATED publisher page, distinct from
+  # the app marketing page. Sister app PaceSeeker uses two separate URLs
+  # (publisher = stealthlynk.io, app = stealthlynk.io/seekerarb) and was
+  # approved first try; DietPlanner v1.0.x submissions used the same URL
+  # for both fields and got rejected three times in a row.
+  #
+  # publisher.html is a dedicated developer/publisher landing page with
+  # the publisher identity, app list, contact channels, and compliance
+  # statements. It is NOT a product marketing page (that's index.html,
+  # used below as app.urls.website).
+  website: https://dietplanner.fit/publisher.html
+  email: contact@dietplanner.fit
+  media:
+    - purpose: icon
+      uri: ./assets/icon.png
+
 app:
   name: DietPlanner
-  package: com.veronikusik.dietplanner
-  version: 1.0.1
-  versionCode: 101
-  category: Health & Fitness
-  platform: android
-  repository: https://github.com/veronikusik/dietplanner
+  # Filled in by the CLI on `npx dapp-store create app`. Leave blank for
+  # the initial mint.
+  address:
+  android_package: fit.dietplanner
+  urls:
+    license_url: https://dietplanner.fit/terms.html
+    privacy_policy_url: https://dietplanner.fit/privacy.html
+    copyright_url: https://dietplanner.fit/copyright.html
+    # The separate app-specific website (vs the publisher website above).
+    # Both fields are required by the schema. For a single-app publisher
+    # the two URLs can legitimately point to the same page.
+    website: https://dietplanner.fit/
+  media:
+    - purpose: icon
+      uri: ./assets/icon.png
 
-developer:
-  name: DietPlanner
-  email: contact@dietplanner.fit
-  github: https://github.com/veronikusik
-  website: https://veronikusik.github.io/dietplanner/
+release:
+  # Filled in by the CLI on `npx dapp-store create release`.
+  address:
+  media:
+    - purpose: icon
+      uri: ./assets/icon.png
+    # TODO: replace screenshot placeholders with three real 1920×1080
+    # captures from the running app before submission.
+    - purpose: screenshot
+      uri: ./assets/screenshot-1.png
+    - purpose: screenshot
+      uri: ./assets/screenshot-2.png
+    - purpose: screenshot
+      uri: ./assets/screenshot-3.png
+  files:
+    # APK produced by `cd android && ./gradlew assembleRelease`.
+    - purpose: install
+      uri: ../android/app/build/outputs/apk/release/app-release.apk
+  catalog:
+    en-US:
+      name: DietPlanner
+      short_description: Personalized nutrition planning with Solana wallet-based SKR premium features.
+      long_description: |
+        DietPlanner is an Android-first nutrition planning app for Solana Mobile users.
+        Personalized daily meal plans based on goal, height, weight, age, and activity
+        level. Local-first privacy: profile data stays on device. Premium features such
+        as AI Chef Pro, Deep Food Intel, and Micro-Coach are unlocked with SKR token
+        payments via Mobile Wallet Adapter. The app does not custody funds, private
+        keys, recovery phrases, or wallet credentials. Educational content only — not
+        medical advice. See https://dietplanner.fit/health-disclaimer.html for the
+        full health disclaimer.
+      new_in_version: |
+        - Cleaner package id (fit.dietplanner).
+        - Per-purchase consent modal with itemised SKR amount and treasury wallet.
+        - Hardened on-chain transaction confirmation (no more optimistic success).
+        - Updated developer website at dietplanner.fit.
+      saga_features: |
+        - Solana Mobile Wallet Adapter for secure, in-wallet signing.
+        - SPL token payments in SKR — the Solana Mobile governance token.
+        - On-chain daily check-ins with wallet-linked progress.
 
-solana:
-  walletAdapter: true
-  cluster: mainnet-beta
-  usesSplTokenPayments: true
-  paymentToken: SKR
-
-listing:
-  shortDescription: Personalized nutrition planning with Solana wallet-based SKR premium features.
-  longDescriptionFile: ./listing.md
-  website: https://veronikusik.github.io/dietplanner/
-  privacyPolicy: https://veronikusik.github.io/dietplanner/privacy.html
-  termsOfService: https://veronikusik.github.io/dietplanner/terms.html
-  healthDisclaimer: https://veronikusik.github.io/dietplanner/health-disclaimer.html
-  copyright: https://veronikusik.github.io/dietplanner/copyright.html
-  icon: ./assets/icon.png
-  splash: ./assets/splash.png
-
-build:
-  apkCommand: npm run build:android:release
-  aabCommand: npm run build:android:bundle
-  apkOutput: android/app/build/outputs/apk/release/app-release.apk
-  aabOutput: android/app/build/outputs/bundle/release/app-release.aab
+solana_mobile_dapp_publisher_portal:
+  # Optional: same package on Google Play (we don't ship to Play; leave blank).
+  google_store_package:
+  testing_instructions: |
+    1. Install the APK. Tap through the first-launch Terms / Privacy /
+       Health Disclaimer screen and confirm 18+ to enter the app.
+    2. Build a profile (sex / age / height / weight / activity / goal /
+       meals per day) on the My Plan tab. A daily meal plan and macro
+       targets should appear within a second.
+    3. Tap the "Connect" button in the top-right header to authorize a
+       Solana wallet via Mobile Wallet Adapter (Phantom, Solflare, etc.).
+    4. Open the Premium tab. Tap "Buy" on Micro-Coach (10 SKR / 24 hours)
+       — this opens the per-purchase confirmation modal showing the exact
+       SKR amount, the publisher treasury wallet
+       8uGjpp5np7qj8wr9xtKrYJcuXpfVdUixZQDaESvqpS6J, and the SOL network
+       fee. Tick the consent checkbox and tap "Confirm & Sign" to trigger
+       the wallet signing flow. Note: a real wallet balance of at least
+       10 SKR + ~0.005 SOL is required to complete; the app refuses to
+       sign without enough balance.
+    5. Once confirmed on-chain, the Micro-Coach card on My Plan unlocks
+       and the daily check-in becomes available for 24 hours.
+    6. Public reviewer wallet (test SKR + SOL preloaded) and contact
+       email are available on request — contact@dietplanner.fit.

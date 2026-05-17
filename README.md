@@ -4,19 +4,13 @@ Android-only Solana diet app with MWA wallet connect, nutrition education, perso
 
 Developer: DietPlanner <contact@dietplanner.fit>
 Repository: https://github.com/veronikusik/dietplanner
-Android package: `com.veronikusik.dietplanner`
+Android package: `fit.dietplanner`
 
 ## Run
 
 ```bash
 npm install
 npm run android
-```
-
-Run from this folder:
-
-```bash
-/Users/vishyn369/Downloads/StealthLynk/NEW/DEMO_APPS/FileSharing/DietPlanner
 ```
 
 ## Data sources
@@ -75,21 +69,19 @@ Before submission, verify the current Solana dApp Store metadata schema and copy
 
 ## Public legal pages
 
-GitHub Pages-ready pages live in `docs/`:
+Public-facing legal pages are served from the `dietplanner.fit` custom domain. The HTML sources live in `docs/`:
 
-- `docs/index.html`
-- `docs/privacy.html`
-- `docs/terms.html`
-- `docs/health-disclaimer.html`
-- `docs/copyright.html`
+- `docs/index.html` → https://dietplanner.fit/
+- `docs/privacy.html` → https://dietplanner.fit/privacy.html
+- `docs/terms.html` → https://dietplanner.fit/terms.html
+- `docs/health-disclaimer.html` → https://dietplanner.fit/health-disclaimer.html
+- `docs/copyright.html` → https://dietplanner.fit/copyright.html
 
-After pushing to `https://github.com/veronikusik/dietplanner`, enable GitHub Pages from the `main` branch `/docs` folder. The public listing URLs will be:
+These URLs are referenced by `app.json` (`extra.legal`), `src/App.js` (`LEGAL_URLS`), and `dapp-store/config.yaml` (`listing.*`). Solana dApp Store reviewers will open all four URLs and compare their content with the in-app disclosures. Before submitting:
 
-- `https://veronikusik.github.io/dietplanner/`
-- `https://veronikusik.github.io/dietplanner/privacy.html`
-- `https://veronikusik.github.io/dietplanner/terms.html`
-- `https://veronikusik.github.io/dietplanner/health-disclaimer.html`
-- `https://veronikusik.github.io/dietplanner/copyright.html`
+1. Confirm `dietplanner.fit` DNS resolves and serves the `docs/` content (e.g. via GitHub Pages with a `CNAME` file, Cloudflare Pages, or any static host).
+2. `curl -I https://dietplanner.fit/privacy.html` must return `200 OK`. Same for `terms.html` and `health-disclaimer.html`.
+3. If `dietplanner.fit` is not yet live, point all three references back to `https://veronikusik.github.io/dietplanner/` (the docs/ folder is already shaped for GitHub Pages) and resubmit — but keep them consistent across the three files.
 
 ## Create the standalone public GitHub repo
 

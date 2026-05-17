@@ -1,4 +1,4 @@
-package com.veronikusik.dietplanner
+package fit.dietplanner
 
 import android.app.Application
 import android.content.res.Configuration
